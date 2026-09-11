@@ -1,0 +1,133 @@
+# Unslop configuration.
+#
+# This file lives beside unslop.exe, so the whole installation is one folder.
+#
+# Edit, save, then restart Unslop. Delete this file to get these documented
+# defaults back. Anything you leave out falls back to the value shown here,
+# so it is safe to keep only the lines you have changed.
+
+
+# The global hotkey.
+#
+# Modifiers are CTRL, ALT, SHIFT and SUPER, joined with "+". Key names are
+# "KeyA" to "KeyZ", "Digit0" to "Digit9", "F1" upwards, and so on.
+#
+# Note that a global hotkey is taken system wide: binding CTRL+KeyU on its own
+# would cost you kill-line in every shell and terminal you use.
+hotkey = "CTRL+ALT+KeyU"
+
+
+# Start Unslop when you sign in to Windows.
+#
+# This adds Unslop to the standard per-user Run key, so you can also see and
+# remove it under Startup apps in Task Manager. The setting here is applied on
+# every launch, so turning it off and restarting once removes the entry.
+launch_at_startup = false
+
+
+# Replace the tray, window and taskbar icon.
+#
+# A path to a PNG, absolute or relative to the executable. Around 64 by 64 is
+# right. Leave empty for the built-in icon. An icon that will not load is
+# reported and ignored rather than taking the application down.
+icon = ""
+
+
+[rewrite]
+# Where the rewrite happens.
+#
+#   "local"   a llama-server running on this machine. Nothing leaves it.
+#   "remote"  an OpenAI-compatible API. See [remote] before turning this on.
+#   "off"     the deterministic rules pass only, with no model at all.
+#
+# "off" is a genuine option rather than a degraded one. The rules pass fixes
+# filler phrases and em dashes on its own, instantly, and is what lands on the
+# clipboard before any model is consulted.
+provider = "local"
+
+# Lower is more repeatable. Measured over eighteen runs, temperature made
+# almost no difference to how many AI tells survived, so this leans towards
+# giving the same answer twice rather than towards variety.
+temperature = 0.2
+
+# Clipboard content longer than this is left to the rules pass. The input, the
+# instructions and the reply all have to fit the context window together.
+max_input_chars = 6000
+
+# Longest rewrite to accept before giving up on a runaway generation.
+max_output_tokens = 1200
+
+
+[local]
+# The weights. Offered as a download on first run if this file is missing.
+#
+# Measured over 12 samples x 5 runs, twice, against the rule pack's own
+# detectors. Tells left per run, out of 53 the rules pass
+# alone cannot fix:
+#
+#   Qwen3-8B   Q4_K_M  0.2   5325MB
+#   Qwen3.5-4B Q6_K    0.7   3634MB   <- this one
+#   Qwen3.5-4B Q4_K_M  2.2   3127MB
+#   Qwen3-4B   Q4_K_M  10.0  3226MB
+#
+# So the generation, not the size, was what failed in the old 4B. Q6_K rather
+# than Q4_K_M because the coarser quantisation measurably loses adherence, and
+# 500MB is the cheapest thing here to spend. No facts were lost in 420 rewrites.
+#
+# The one thing the 8B does better: it rewrites a plain-text bullet list where
+# this model flattens it into prose every time. That is caught and refused now,
+# so such a list comes back rules-only rather than wrong.
+#
+# Not measured: speed. This model is steady at about 2.8s a rewrite, but the
+# 8B's own figure moved between 1.6s and 3.8s purely with ordering on a
+# thermally throttled laptop 4070, so the two are not yet comparable.
+model = "models/qwen3.5-4b-q6_k.gguf"
+
+# How long an idle model server keeps hold of its VRAM.
+#
+# Drop this if the card is shared with something that needs the memory back
+# promptly. The cost of a short timeout is a model reload, about 19 seconds,
+# on the next rewrite after a gap. The rules pass stays instant either way.
+idle_unload_mins = 10
+
+# Context window. max_input_chars above needs roughly 2200 tokens once the
+# instructions are included, so going much below 3072 starts rejecting
+# ordinary paragraphs.
+context = 4096
+
+# GPU layers to offload. 99 means all of them. Lower it to trade speed for
+# VRAM on a card that is busy with something else.
+gpu_layers = 99
+
+
+[remote]
+# Sending your clipboard somewhere else.
+#
+# WARNING: this is the one setting that breaks the promise the rest of the
+# tool is built around. With provider = "remote" your clipboard text is sent
+# to a third party, who may log it.
+#
+# Prices, email addresses, dates, phone numbers and URLs are replaced with
+# placeholders before anything is sent, so those never leave this machine.
+# The prose around them does.
+#
+# Any OpenAI-compatible endpoint works: OpenRouter, OpenAI, Together, or
+# something on your own network.
+base_url = "https://openrouter.ai/api/v1"
+
+# Pick one from https://openrouter.ai/models, for example
+# "anthropic/claude-3.5-haiku" or "openai/gpt-4o-mini".
+model = ""
+
+# Left empty, the OPENROUTER_API_KEY environment variable is used instead,
+# which keeps the key out of this file and out of your backups.
+api_key = ""
+
+
+[rules]
+# Add your own tells without rebuilding.
+#
+# Point this at a copy of the bundled rules pack and edit it. Leave it empty
+# to use the built-in one. A pack that fails to parse is ignored with a
+# warning rather than taking the application down.
+path = ""

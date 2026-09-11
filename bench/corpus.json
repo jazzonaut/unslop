@@ -1,0 +1,64 @@
+[
+  {
+    "id": "canonical",
+    "note": "the canonical sample, held fixed so scores stay comparable between runs",
+    "text": "In today's rapidly evolving digital landscape, it is important to note that our robust and seamless platform doesn't just streamline your workflow, it fundamentally transforms it. By leveraging cutting-edge technology, we foster a vibrant ecosystem that empowers teams to delve into their data. Please send the \u00a34,500 invoice to billing@example.com by March 12.",
+    "facts": ["\u00a34,500", "billing@example.com", "March 12"]
+  },
+  {
+    "id": "release-note",
+    "text": "We're thrilled to announce a pivotal update that underscores the importance of developer experience. The new caching layer doesn't just reduce latency, it reshapes how your services talk to each other. By leveraging a robust invalidation strategy, teams can delve into performance data and unlock actionable insights. Rolling out to all accounts on 14 April 2026.",
+    "facts": ["14 April 2026"]
+  },
+  {
+    "id": "meeting-summary",
+    "text": "The meeting served as a testament to the team's resilience. Attendees explored a myriad of options, ultimately landing on a streamlined approach that fosters collaboration across the organisation. It is worth noting that the revised budget of \u00a382,000 was approved, highlighting the leadership's commitment to sustainable growth. Next review is on 3 June.",
+    "facts": ["\u00a382,000", "3 June"]
+  },
+  {
+    "id": "vague-attribution",
+    "text": "Experts believe the shift toward remote infrastructure is a pivotal moment for the industry. Studies show that organisations leveraging cloud-native tooling see significant gains, and industry reports suggest the trend will only accelerate. At its core, the real question is whether legacy vendors can adapt. The stakes are significant. Contact sales@example.org for the full report.",
+    "facts": ["sales@example.org"]
+  },
+  {
+    "id": "throat-clearing",
+    "text": "Here's the thing: migrations are hard. Let's dive in and break this down. In the world of distributed systems, a robust rollback plan isn't just useful, it's essential. Our seamless tooling empowers engineers to navigate the intricate landscape of schema changes with confidence. The migration window opens at 02:00 on 9 May and costs roughly \u00a31,200 in compute.",
+    "facts": ["02:00", "9 May", "\u00a31,200"]
+  },
+  {
+    "id": "generic-conclusion",
+    "text": "The pilot delivered exceptional results, showcasing the platform's versatility. Not only did response times improve, but customer satisfaction climbed as well. This marks a pivotal turning point for the programme, reflecting broader shifts in how we serve our users. The future looks bright, and the possibilities are endless. Full results were published on 21 February 2026.",
+    "facts": ["21 February 2026"]
+  },
+  {
+    "id": "hedging",
+    "text": "The outage could potentially have been caused by a misconfigured health check, though it is believed that upstream throttling may possibly have contributed. Our monitoring stack, which serves as the backbone of our reliability posture, boasts sub-second detection. We have delved into the logs and surfaced a tapestry of contributing factors. The incident began at 14:32 UTC and lasted 47 minutes.",
+    "facts": ["14:32", "47 minutes"]
+  },
+  {
+    "id": "bullets",
+    "text": "Key takeaways from the quarter:\n\n- **Growth**: revenue rose to \u00a31.4m, underscoring the strength of our core offering.\n- **Retention**: churn fell, reflecting deeper customer engagement.\n- **Roadmap**: we will continue to foster innovation across the portfolio.\n\nIn conclusion, the numbers tell us that our strategy is working. Board review is scheduled for 30 September.",
+    "facts": ["\u00a31.4m", "30 September"]
+  },
+  {
+    "id": "ing-tail",
+    "text": "The team shipped the redesign three weeks early, demonstrating a commitment to velocity and underscoring the value of the new process. Adoption climbed steadily through the quarter, cementing the product's position in a crowded market and highlighting an appetite for simpler tools. The redesign cost \u00a318,000 and launched on 7 January.",
+    "facts": ["\u00a318,000", "7 January"]
+  },
+  {
+    "id": "clean-control",
+    "note": "already plain: the model should leave it alone, so this catches damage rather than slop",
+    "text": "We cut the export step because nobody used it. The build is about 40 seconds faster now. Tom found the bug in the retry loop, which had been swallowing errors since the March release. Invoice 8841 for \u00a3620 went out on 2 April to accounts@example.net.",
+    "facts": ["\u00a3620", "2 April", "accounts@example.net", "8841"]
+  },
+  {
+    "id": "negative-listing",
+    "text": "This is not a rebrand. This is not a refresh. It is a fundamental rethinking of what a workspace can be. Our intricate yet intuitive interface empowers every member of your team, fostering a culture of deep work that stands as a testament to thoughtful design. Early access opens 18 August at \u00a329 per seat.",
+    "facts": ["18 August", "\u00a329"]
+  },
+  {
+    "id": "technical-prose",
+    "text": "It is important to note that the indexer leverages a robust write-ahead log to ensure durability. In order to maintain throughput, we have delved into batching strategies, ultimately arriving at a seamless approach that showcases the value of incremental compaction. The p99 write latency is now 12ms, down from 85ms, measured on 5 July 2026.",
+    "facts": ["12ms", "85ms", "5 July 2026"]
+  }
+]

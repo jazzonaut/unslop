@@ -257,7 +257,10 @@ fn a_deleted_phrase_takes_the_punctuation_that_set_it_off() {
         "The plan was vague."
     );
     // A phrase with nothing around it still reads the same as before.
-    assert_eq!(clean("It is important to note that data wins."), "Data wins.");
+    assert_eq!(
+        clean("It is important to note that data wins."),
+        "Data wins."
+    );
 }
 
 #[test]

@@ -8,9 +8,19 @@
 //!
 //!     cargo run --release --example bench -- corpus.json 5 models/a.gguf models/b.gguf
 
-use std::{env, fs, path::Path, time::{Duration, Instant}};
+use std::{
+    env, fs,
+    path::Path,
+    time::{Duration, Instant},
+};
 
-use unslop::{config::Config, doc::Doc, model::{self, Model}, rewrite, rules::Rules};
+use unslop::{
+    config::Config,
+    doc::Doc,
+    model::{self, Model},
+    rewrite,
+    rules::Rules,
+};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -28,7 +38,11 @@ fn main() {
     let exe = model::choose_backend().expect("no llama-server backend sees a device");
 
     for weights in weights {
-        let name = Path::new(weights).file_stem().unwrap().to_string_lossy().into_owned();
+        let name = Path::new(weights)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
 
         // VRAM is a delta: Windows does not report it per process, so the
         // reading before the server starts is the only baseline available.
@@ -65,12 +79,15 @@ fn main() {
                     Ok(doc) => (doc.text().to_owned(), serde_json::Value::Null),
                     Err(err) => (baseline.clone(), err.to_string().into()),
                 };
-                println!("{}", serde_json::json!({
-                    "model": name, "run": run, "id": id, "ms": ms,
-                    "input": text, "baseline": baseline,
-                    "output": output, "rejected": rejected,
-                    "facts": item["facts"], "load_ms": load.as_millis(), "vram_mib": vram,
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "model": name, "run": run, "id": id, "ms": ms,
+                        "input": text, "baseline": baseline,
+                        "output": output, "rejected": rejected,
+                        "facts": item["facts"], "load_ms": load.as_millis(), "vram_mib": vram,
+                    })
+                );
             }
             eprintln!("{name}: run {} of {runs} done", run + 1);
         }

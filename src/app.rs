@@ -305,7 +305,6 @@ impl App {
         });
         true
     }
-
 }
 
 /// The model server, when a local rewrite is both wanted and possible.
@@ -342,9 +341,8 @@ pub fn setup_note(config: &Config, install: Option<String>, has_backend: bool) -
         // This is the quieter one: everything is on disk and nothing on this
         // machine can run it, which would otherwise show as a green
         // "Unslopped" with no hint that the model pass never happened.
-        Provider::Local => {
-            install.or_else(|| (!has_backend).then(|| "no GPU backend found, rules only".to_owned()))
-        }
+        Provider::Local => install
+            .or_else(|| (!has_backend).then(|| "no GPU backend found, rules only".to_owned())),
     }
 }
 

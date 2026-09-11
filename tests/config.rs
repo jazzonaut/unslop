@@ -87,8 +87,12 @@ fn the_tray_toggle_rewrites_one_line_and_nothing_else() {
     assert!(on.contains("launch_at_startup = true"));
     assert!(!on.contains("launch_at_startup = false"));
     assert_eq!(
-        file.lines().filter(|l| l.trim_start().starts_with('#')).count(),
-        on.lines().filter(|l| l.trim_start().starts_with('#')).count(),
+        file.lines()
+            .filter(|l| l.trim_start().starts_with('#'))
+            .count(),
+        on.lines()
+            .filter(|l| l.trim_start().starts_with('#'))
+            .count(),
         "the toggle lost comments"
     );
     // Everything else must survive the round trip untouched.

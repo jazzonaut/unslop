@@ -82,10 +82,7 @@ impl Part {
     }
 
     /// Fetch this part, unpacking it if it arrived as an archive.
-    fn fetch(
-        &self,
-        on_progress: impl FnMut(Progress),
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn fetch(&self, on_progress: impl FnMut(Progress)) -> Result<(), Box<dyn std::error::Error>> {
         let Some(dir) = &self.unpack_to else {
             return download::to_file(&self.url, &self.marker, on_progress);
         };
@@ -158,7 +155,12 @@ impl Installer {
             return;
         }
 
-        let missing: Vec<Part> = self.parts.iter().filter(|p| !p.present()).cloned().collect();
+        let missing: Vec<Part> = self
+            .parts
+            .iter()
+            .filter(|p| !p.present())
+            .cloned()
+            .collect();
         // A download skips a destination that already exists, so a file of the
         // wrong size has to go first or retrying would succeed instantly and
         // leave the same broken model in place.

@@ -33,6 +33,12 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 const RULES_LABEL: &str = "Rules only";
 const MODEL_LABEL: &str = "Model rewrite";
 
+/// What the popup says when the hotkey lands on nothing. An image or a file
+/// copied from Explorer offers no text either, so this covers more than a
+/// clipboard that is literally empty.
+const EMPTY_CLIPBOARD: &str = "Nothing to unslop on the clipboard";
+const UNREADABLE_CLIPBOARD: &str = "Could not read the clipboard";
+
 /// How often the clipboard is checked while the popup is open, so a Ctrl+C in
 /// another window is picked up without reaching for the hotkey again. Only the
 /// sequence number is read, which costs one function call.
@@ -102,15 +108,21 @@ impl App {
 
     /// Unslop the clipboard, show it, then ask the model to do better.
     pub fn on_hotkey(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>) {
+        self.unslop(popup, proxy, true);
+    }
+
+    /// `asked` marks a deliberate hotkey press, as opposed to the poll below.
+    /// It decides only what happens when there is nothing to work on.
+    fn unslop(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>, asked: bool) {
         // Recorded before the read, so a copy landing in between costs one
         // harmless repeat rather than going unnoticed.
         self.seen_clipboard = clip::sequence();
         let doc = match clip::read() {
             Ok(Some(doc)) => doc,
-            Ok(None) => return,
+            Ok(None) => return self.nothing_to_do(popup, asked, EMPTY_CLIPBOARD),
             Err(err) => {
                 eprintln!("clipboard read failed: {err}");
-                return;
+                return self.nothing_to_do(popup, asked, UNREADABLE_CLIPBOARD);
             }
         };
 
@@ -147,8 +159,37 @@ impl App {
     // AddClipboardFormatListener if the wakeups ever show in a battery trace.
     pub fn poll_clipboard(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>) {
         if popup.is_visible() && clip::sequence() != self.seen_clipboard {
-            self.on_hotkey(popup, proxy);
+            self.unslop(popup, proxy, false);
         }
+    }
+
+    /// Answer a hotkey press that has nothing to work on.
+    ///
+    /// Returning in silence was the old behaviour, and a hotkey that opens no
+    /// window reads as a crash: an empty clipboard, a copied image and a
+    /// broken build all look identical from the outside. The poll is the one
+    /// exception, since copying an image while the popup is open must not
+    /// throw away the result the user is still reading.
+    fn nothing_to_do(&mut self, popup: &Popup, asked: bool, message: &str) {
+        if !asked {
+            return;
+        }
+        // Cleared so Copy has nothing to publish, and so a rewrite still in
+        // flight from an earlier press cannot land on top of the message.
+        self.active_job += 1;
+        self.baseline = None;
+        self.rewritten = None;
+        self.shown = None;
+        self.original.clear();
+        self.fixes = 0;
+        self.showing_baseline = true;
+
+        // No footer detail: there were no fixes to count, and the page hides
+        // that pill when it is empty.
+        popup.show(&Doc::Plain(String::new()), "", "");
+        popup.set_phase(Phase::Warn, message);
+        popup.set_toggle(None);
+        popup.set_install(self.install_button(), self.note());
     }
 
     /// When the event loop should next wake: for an idle server, or for the

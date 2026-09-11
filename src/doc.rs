@@ -21,6 +21,13 @@ impl Doc {
         }
     }
 
+    /// Whether there is anything here worth working on. Whitespace is not
+    /// content, and markup with no words in it is an empty paragraph rather
+    /// than something to rewrite.
+    pub fn is_blank(&self) -> bool {
+        self.text().trim().is_empty()
+    }
+
     pub fn is_rich(&self) -> bool {
         matches!(self, Doc::Rich { .. })
     }

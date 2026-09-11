@@ -33,10 +33,14 @@ pub fn read() -> SysResult<Option<Doc>> {
         if !has_text {
             text = markdown::from_html(&html).unwrap_or_default();
         }
-        return Ok(Some(Doc::Rich { html, text }));
+        let doc = Doc::Rich { html, text };
+        return Ok((!doc.is_blank()).then_some(doc));
     }
 
-    Ok(has_text.then_some(Doc::Plain(text)))
+    // An empty clipboard and one holding a stray newline are the same thing to
+    // anyone pressing the hotkey, so both leave here as nothing usable.
+    let doc = Doc::Plain(text);
+    Ok((has_text && !doc.is_blank()).then_some(doc))
 }
 
 /// Write a document back, setting every format in a single clipboard open.

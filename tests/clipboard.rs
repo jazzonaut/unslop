@@ -9,6 +9,24 @@ fn round_trip(doc: Doc) {
 }
 
 #[test]
+fn whitespace_is_not_content() {
+    // The hotkey used to open no window at all for a blank clipboard, which
+    // from the outside is indistinguishable from the app having died.
+    for blank in ["", " ", "\n\t  \r\n"] {
+        assert!(
+            Doc::Plain(blank.into()).is_blank(),
+            "{blank:?} passed as text"
+        );
+    }
+    let empty_markup = Doc::Rich {
+        html: "<p>&nbsp;</p>".into(),
+        text: " ".into(),
+    };
+    assert!(empty_markup.is_blank(), "empty markup passed as content");
+    assert!(!Doc::Plain("  x  ".into()).is_blank(), "real text refused");
+}
+
+#[test]
 #[ignore = "uses the real clipboard"]
 fn rich_html_survives_a_round_trip() {
     round_trip(Doc::Rich {

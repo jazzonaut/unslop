@@ -50,8 +50,10 @@ fn decode(bytes: &[u8]) -> Result<Image, String> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buffer,
         png::ColorType::Rgb => buffer
-            .chunks_exact(3)
-            .flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
             .collect(),
         other => {
             return Err(format!(

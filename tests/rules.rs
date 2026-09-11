@@ -271,3 +271,135 @@ fn a_phrase_with_no_safe_substitute_is_left_for_the_model() {
     assert!(!out.contains("a analysis"), "left a broken article: {out}");
     assert_eq!(out, "Let's take a deep dive into the data.");
 }
+
+#[test]
+fn the_pack_detectors_all_survive_translation() {
+    // The pack's regex rules are JavaScript, and a pattern that fails to
+    // translate is skipped with a line on stderr that nobody reads. A whole
+    // class of tell would then go undetected with nothing to show for it, so
+    // every detector is exercised here against text it must match.
+    let rules = rules();
+    for (id, text) in [
+        ("em-dash", "a -- b"),
+        ("curly-double-quotes", "he said \u{201c}hi\u{201d}"),
+        ("emoji", "ship it \u{1f680}"),
+        ("negative-parallelism", "not just fast but reliable"),
+        ("its-not-x-its-y", "It's not a tool, it's a platform"),
+        ("negative-listing", "Not a bug here. Not a feature there."),
+        ("ing-tail", "we shipped, highlighting the gains"),
+        ("copula-avoidance", "it serves as a hub"),
+        ("vague-attribution", "experts believe so"),
+        ("chatbot-artifact", "i hope this helps"),
+        ("cutoff-disclaimer", "as of my last training data"),
+        ("hedging-stack", "could potentially fail"),
+        ("generic-conclusion", "the future looks bright"),
+        ("significance-inflation", "is a testament to grit"),
+        ("throat-clearing", "here's the thing about it"),
+        ("authority-trope", "at its core it works"),
+        ("vague-declarative", "the stakes are significant"),
+        ("false-agency", "the data tells us plenty"),
+        ("inline-header-list", "- **Growth**: up"),
+        ("oxford-triple", "red, green, and blue"),
+    ] {
+        assert!(
+            rules.detect(text).iter().any(|hit| hit.id == id),
+            "detector {id:?} never fired"
+        );
+    }
+}
+
+#[test]
+fn ordinary_writing_is_not_a_finding() {
+    // The checklist goes straight into a prompt, so a false positive is an
+    // instruction to damage a sentence that was fine.
+    for text in [
+        "We removed the export step because nobody used it.",
+        "Costs fell 12%, headcount held, and churn dropped.",
+        "The migration runs in two phases and the second is reversible.",
+    ] {
+        let hits = rules().detect(text);
+        assert!(hits.is_empty(), "{text:?} flagged {hits:?}");
+    }
+}
+
+#[test]
+fn a_curly_apostrophe_does_not_hide_a_phrase() {
+    // Word and most chat clients substitute the curly form as you type, so the
+    // pack's straight-quoted phrases have to match either.
+    let straight = rules().detect("In today's rapidly evolving market.");
+    let curly = rules().detect("In today\u{2019}s rapidly evolving market.");
+    assert!(!straight.is_empty());
+    assert_eq!(straight, curly);
+}
+
+/// A pack small enough to reason about, so the tier gates can be pinned without
+/// depending on how many words the vendored pack happens to list in each tier.
+const PACK: &str = r#"{
+  "vocabulary": {
+    "tier1": {"weight": 5, "words": ["testament", "empower"]},
+    "tier2": {"weight": 3, "minDistinct": 2, "words": ["paradigm", "cutting-edge"]},
+    "tier3": {"weight": 1, "maxDensityPct": 1.5, "words": ["valuable"]}
+  },
+  "phrases": [
+    {"match": "in order to", "fix": "to", "category": "filler", "weight": 3},
+    {"match": "in today's rapidly evolving", "fix": null, "category": "significance", "weight": 5},
+    {"match": "best practices", "fix": null, "category": "jargon", "weight": 2}
+  ],
+  "regex": [
+    {"id": "negative-parallelism", "pattern": "\\bnot (?:just|only|merely)\\b[^.!?\\n]{0,80}?\\bbut\\b", "category": "language", "weight": 3},
+    {"id": "generic-conclusion", "pattern": "\\b(?:journey toward excellence)\\b", "category": "filler", "weight": 4}
+  ]
+}"#;
+
+fn small_pack() -> Rules {
+    Rules::load(PACK).expect("the fixture pack must parse")
+}
+
+#[test]
+fn a_phrase_with_no_fix_is_still_detected() {
+    // The point of keeping fix-less phrases: the pass cannot act on them, but
+    // naming them is how the model gets told what to do about them.
+    let hits = small_pack().detect("In today's rapidly evolving market, use best practices.");
+    assert!(
+        hits.iter()
+            .any(|hit| hit.matched == "in today's rapidly evolving")
+    );
+    assert!(hits.iter().any(|hit| hit.matched == "best practices"));
+}
+
+#[test]
+fn tier_two_needs_two_distinct_terms() {
+    // One suspicious word is a word. Two is a habit.
+    let rules = small_pack();
+    assert!(
+        !rules
+            .detect("A paradigm changed.")
+            .iter()
+            .any(|hit| hit.tier == Some(2))
+    );
+    let hits = rules.detect("A paradigm changed with cutting-edge tooling.");
+    assert_eq!(hits.iter().filter(|hit| hit.tier == Some(2)).count(), 2);
+}
+
+#[test]
+fn a_regex_finding_quotes_the_text_it_matched() {
+    // The matched span goes straight into a prompt, so it has to be the words
+    // from this document rather than the detector's name for them.
+    let hits = small_pack()
+        .detect("It is not just fast but reliable. The journey toward excellence goes on.");
+    let parallelism = hits
+        .iter()
+        .find(|hit| hit.id == "negative-parallelism")
+        .expect("negative parallelism went undetected");
+    assert_eq!(parallelism.matched, "not just fast but");
+    assert!(hits.iter().any(|hit| hit.id == "generic-conclusion"));
+}
+
+#[test]
+fn detection_does_not_widen_what_the_pass_will_fix() {
+    // "testament" is detected and deliberately left in the text: the pack has
+    // no safe substitute, so the pass must not invent one.
+    let cleaned = small_pack().clean("In order to ship, keep the testament.");
+    assert_eq!(cleaned.text, "To ship, keep the testament.");
+    assert_eq!(cleaned.fixes, 1);
+}

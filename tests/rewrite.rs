@@ -1,7 +1,12 @@
 //! The model pass must improve on the deterministic result or get out of the
 //! way. It is never allowed to make things worse.
 
-use unslop::{config::Config, doc::Doc, rewrite, rules::Rules};
+use unslop::{
+    config::Config,
+    doc::Doc,
+    rewrite,
+    rules::{Finding, Rules},
+};
 
 const PORT: u16 = 8127;
 
@@ -9,19 +14,48 @@ fn rules() -> Rules {
     Rules::load(include_str!("../rules/slop-rules.json")).expect("vendored pack")
 }
 
+/// Slop-heavy on purpose, covering vocabulary, a fix-less phrase and a regex
+/// detector so one text exercises all three sources of an edit target.
+const SLOPPY: &str = "In today's rapidly evolving market we delve into the intricate \
+                      tapestry of controls. The stakes are significant.";
+
 #[test]
 fn the_prompt_carries_the_packs_own_tells() {
     // One file drives both passes, so a tell added to the pack reaches the
     // model without anyone editing a prompt string.
-    let prompt = rewrite::system_prompt(&rules(), 2);
-    for expected in ["delve", "tapestry", "em dash", "[[F00]]"] {
+    let prompt = rewrite::system_prompt(&rules(), SLOPPY, 2);
+    for expected in [
+        "delve",
+        "tapestry",
+        "in today's rapidly evolving",
+        "The stakes are significant",
+        "em dash",
+        "[[F00]]",
+    ] {
         assert!(
             prompt.contains(expected),
             "{expected:?} missing from the prompt"
         );
     }
-    // Short on purpose: the pack's detector notes measurably hurt adherence.
-    assert!(prompt.len() < 2200, "the prompt is drifting long again");
+    // Short on purpose: the pack's detector notes measurably hurt adherence,
+    // and the checklist is the only part allowed to grow with the document.
+    assert!(prompt.len() < 2600, "the prompt is drifting long again");
+}
+
+#[test]
+fn the_prompt_names_only_what_is_present() {
+    // The point of the checklist over a global word list. Text that never said
+    // "delve" must not be told to remove it: a 4B given a word to avoid will
+    // find somewhere to avoid it, and the edit it makes is not an improvement.
+    let prompt = rewrite::system_prompt(&rules(), "We cut the export step. Nobody used it.", 0);
+    assert!(
+        !prompt.contains("delve"),
+        "a word from another document leaked"
+    );
+    assert!(
+        prompt.contains("No specific rule-pack hit"),
+        "clean text should be told there is nothing to chase"
+    );
 }
 
 #[test]
@@ -29,12 +63,15 @@ fn the_placeholder_rule_is_absent_when_nothing_is_protected() {
     // Prose with no price or date in it protects nothing, and a 4B shown the
     // example anyway copies [[F00]] into its answer. Restore then rejects a
     // rewrite that was fine, so the rule is only stated when it applies.
-    let prompt = rewrite::system_prompt(&rules(), 0);
+    let prompt = rewrite::system_prompt(&rules(), SLOPPY, 0);
     assert!(
         !prompt.contains("[[F"),
         "the example placeholder is still there to be copied"
     );
-    assert!(prompt.contains("delve"), "the rest of the prompt went too");
+    assert!(
+        prompt.contains("delve"),
+        "the rest of the prompt went with it"
+    );
 }
 
 #[test]
@@ -116,7 +153,7 @@ fn a_real_rewrite_removes_the_tells_and_keeps_the_facts() {
 #[ignore = "writes the prompt for tuning"]
 fn dump_prompt() {
     let path = std::env::temp_dir().join("unslop-prompt.txt");
-    std::fs::write(&path, rewrite::system_prompt(&rules(), 2)).unwrap();
+    std::fs::write(&path, rewrite::system_prompt(&rules(), SLOPPY, 2)).unwrap();
     println!("{}", path.display());
 }
 
@@ -240,4 +277,90 @@ fn a_document_may_keep_saying_what_it_already_said() {
     let before = "Our house style: do not use the passive voice in headlines.";
     let after = "House style: do not use the passive voice in headlines.";
     assert!(!rewrite::is_commentary(before, after));
+}
+
+/// A finding as the pack would have produced it, so the two scoring policies
+/// can be pinned without depending on which words the vendored pack lists.
+fn finding(matched: &str, weight: u8, tier: Option<u8>) -> Finding {
+    Finding {
+        id: matched.to_owned(),
+        matched: matched.to_owned(),
+        category: "test".to_owned(),
+        weight,
+        tier,
+    }
+}
+
+#[test]
+fn the_gate_counts_shapes_and_the_repair_pass_counts_words() {
+    let hits = vec![
+        finding("testament", 5, Some(1)),
+        finding("negative contrast", 3, None),
+        finding("valuable", 1, Some(3)),
+    ];
+    // Both strong hits are worth spending a repair call on.
+    assert_eq!(rewrite::repair_score(&hits), 8);
+    // Only the shape is worth rejecting the whole rewrite over. The prompt asks
+    // for precise vocabulary to be kept, so a model that keeps "testament"
+    // where it belongs must not lose its other edits for it.
+    assert_eq!(rewrite::gate_score(&hits), 3);
+}
+
+#[test]
+fn vocabulary_alone_never_blocks_publication() {
+    // "Robust statistics" and "crucial for p99" are ordinary technical English.
+    // Counting them at the gate rejects a good rewrite of a technical document.
+    let words = vec![
+        finding("robust", 5, Some(1)),
+        finding("crucial", 5, Some(1)),
+    ];
+    assert_eq!(rewrite::gate_score(&words), 0);
+}
+
+#[test]
+fn the_checklist_leaves_out_what_the_rules_pass_tolerates() {
+    // oxford-triple and curly quotes are weight 1 and fire on ordinary writing,
+    // and the rules pass leaves both alone on purpose. Listing one asks the
+    // model for an edit nobody wants and spends a checklist line doing it.
+    let prompt = rewrite::system_prompt(&rules(), "The flag takes red, green, and blue.", 0);
+    assert!(
+        prompt.contains("No specific rule-pack hit"),
+        "a weight-one hit reached the checklist: {prompt}"
+    );
+}
+
+#[test]
+fn an_empty_or_runaway_answer_is_not_a_rewrite() {
+    assert!(rewrite::check_length("hello world", "").is_err());
+    assert!(rewrite::check_length("a short line", &"word ".repeat(50)).is_err());
+    assert!(
+        rewrite::check_length(
+            "This is a moderately long sentence that needs editing.",
+            "This sentence needs editing."
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_bold_bullet_is_a_finding_but_never_an_edit_target() {
+    // The pack's inline-header-list detector fires on `- **Label**:` bullets.
+    // The prompt tells the model to keep lists as they are, so listing the
+    // bullet asks for two contradictory things, and counting it at the gate
+    // would reject a rewrite that fixed everything else because the bullets it
+    // was told to keep are still there.
+    let text = "- **Growth**: revenue rose.\n- **Retention**: churn fell.\n";
+    let prompt = rewrite::system_prompt(&rules(), text, 0);
+    assert!(
+        !prompt.contains("**Growth**"),
+        "the bullet reached the checklist: {prompt}"
+    );
+
+    let hits = rules().detect(text);
+    assert!(
+        hits.iter().any(|hit| hit.id == "inline-header-list"),
+        "the detector still has to fire for scoring"
+    );
+    assert_eq!(rewrite::gate_score(&hits), 0);
+    assert_eq!(rewrite::repair_score(&hits), 0);
 }

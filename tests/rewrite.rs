@@ -13,7 +13,7 @@ fn rules() -> Rules {
 fn the_prompt_carries_the_packs_own_tells() {
     // One file drives both passes, so a tell added to the pack reaches the
     // model without anyone editing a prompt string.
-    let prompt = rewrite::system_prompt(&rules());
+    let prompt = rewrite::system_prompt(&rules(), 2);
     for expected in ["delve", "tapestry", "em dash", "[[F00]]"] {
         assert!(
             prompt.contains(expected),
@@ -22,6 +22,19 @@ fn the_prompt_carries_the_packs_own_tells() {
     }
     // Short on purpose: the pack's detector notes measurably hurt adherence.
     assert!(prompt.len() < 2200, "the prompt is drifting long again");
+}
+
+#[test]
+fn the_placeholder_rule_is_absent_when_nothing_is_protected() {
+    // Prose with no price or date in it protects nothing, and a 4B shown the
+    // example anyway copies [[F00]] into its answer. Restore then rejects a
+    // rewrite that was fine, so the rule is only stated when it applies.
+    let prompt = rewrite::system_prompt(&rules(), 0);
+    assert!(
+        !prompt.contains("[[F"),
+        "the example placeholder is still there to be copied"
+    );
+    assert!(prompt.contains("delve"), "the rest of the prompt went too");
 }
 
 #[test]
@@ -103,7 +116,7 @@ fn a_real_rewrite_removes_the_tells_and_keeps_the_facts() {
 #[ignore = "writes the prompt for tuning"]
 fn dump_prompt() {
     let path = std::env::temp_dir().join("unslop-prompt.txt");
-    std::fs::write(&path, rewrite::system_prompt(&rules())).unwrap();
+    std::fs::write(&path, rewrite::system_prompt(&rules(), 2)).unwrap();
     println!("{}", path.display());
 }
 

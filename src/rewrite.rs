@@ -45,8 +45,18 @@ impl fmt::Display for Rejected {
 /// for a human, and measured over eighteen runs they made adherence markedly
 /// worse: roughly four times as many tells survived with them than without.
 /// More instruction is not more obedience in an 8B.
-pub fn system_prompt(rules: &Rules) -> String {
+pub fn system_prompt(rules: &Rules, protected: usize) -> String {
     let banned = rules.banned_words().join(", ");
+
+    // Named only when there is one to name. Given the rule with nothing
+    // protected, a 4B copies the example straight out of the prompt into its
+    // answer, and restore then throws away a rewrite that was otherwise good.
+    let placeholders = if protected == 0 {
+        ""
+    } else {
+        "- Text in double square brackets such as [[F00]] is a protected value. \
+         Copy each one through exactly once, unchanged. Never drop, repeat or invent one.\n"
+    };
 
     format!(
         "You rewrite text so it reads like a person wrote it quickly and plainly.\n\n\
@@ -60,8 +70,7 @@ pub fn system_prompt(rules: &Rules) -> String {
          Rules:\n\
          - Do not swap a banned word for a fancier synonym. Say the plain thing, or drop the claim.\n\
          - Vary sentence length. Some short, some longer.\n\
-         - Text in double square brackets such as [[F00]] is a protected value. \
-           Copy each one through exactly once, unchanged. Never drop, repeat or invent one.\n\
+         {placeholders}\
          - Do not add facts and do not remove facts.\n\
          - Leave wording that already sounds natural alone.\n\
          - Return only the rewritten text, with no preamble and no commentary."
@@ -89,7 +98,12 @@ pub fn run(rules: &Rules, doc: &Doc, config: &Config, port: Option<u16>) -> Resu
     // The model never sees a price, a date or an address, so it cannot alter
     // one. This is prevention; the checks below are the second line.
     let protected = Protected::new(&markdown);
-    let answer = send(config, port, &system_prompt(rules), &protected.text)?;
+    let answer = send(
+        config,
+        port,
+        &system_prompt(rules, protected.count()),
+        &protected.text,
+    )?;
     let restored = protected.restore(answer.trim()).map_err(Rejected::Facts)?;
 
     check_length(&markdown, &restored)?;

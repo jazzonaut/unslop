@@ -36,6 +36,23 @@ one has probably rearranged the sentence around it too.
 A rewrite is also refused if it explains the task instead of doing it, or if it
 flattens a plain-text bullet list into prose.
 
+## Download
+
+The latest zip is on the [releases page](https://github.com/jazzonaut/unslop/releases/latest).
+Unpack it wherever you like. There is no installer: `unslop.exe` is
+self-contained, `config.toml` appears beside it on first run, and the rule pack
+travels in the zip so `rules.path` has something to point at.
+
+Windows will announce that it protected your PC, because the executable is not
+signed. "More info", then "Run anyway". Every release also carries a `.sha256`
+file, if you would rather check the download than trust it:
+
+```
+Get-FileHash unslop-v0.1.0-x86_64-windows.zip -Algorithm SHA256
+```
+
+Or build it yourself.
+
 ## Building
 
 Rust 2024 edition and a recent stable toolchain.

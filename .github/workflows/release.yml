@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a failed publish be retried against a tag that already exists.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # A tag that disagrees with Cargo.toml produces a release whose reported
+      # version is not the one in the binary, so stop before building rather
+      # than after publishing.
+      - name: Check the tag against Cargo.toml
+        id: version
+        run: |
+          $tag = '${{ inputs.tag || github.ref_name }}'
+          $version = $tag -replace '^v', ''
+          $manifest = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ($version -ne $manifest) {
+            Write-Error "tag $tag says $version, Cargo.toml says $manifest"
+            exit 1
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          # v0.2.0-rc1 and the like are not the build to hand to everyone.
+          "prerelease=$(if ($version -match '-') { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --locked --release
+
+      - name: Package
+        id: package
+        run: |
+          $name = "unslop-${{ steps.version.outputs.tag }}-x86_64-windows"
+          New-Item -ItemType Directory -Path "dist/$name/rules" | Out-Null
+          Copy-Item target/release/unslop.exe "dist/$name/"
+          Copy-Item README.md, LICENSE "dist/$name/"
+          # Shipped so rules.path can point at a pack without cloning the repo.
+          Copy-Item rules/slop-rules.json, rules/LICENSE "dist/$name/rules/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii "dist/$name.zip.sha256"
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Unslop ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          files: |
+            dist/${{ steps.package.outputs.name }}.zip
+            dist/${{ steps.package.outputs.name }}.zip.sha256

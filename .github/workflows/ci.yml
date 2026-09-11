@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the run already in flight pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  check:
+    name: fmt, clippy, test, build
+    # Unslop is Windows only: clipboard-win, the tray icon and the WebView2
+    # popup have no other target, so there is nothing to gain from a matrix.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache the registry and target directory
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The clipboard round-trips are #[ignore] by default: they take over the
+      # machine's real clipboard, which on a shared runner is both rude and
+      # flaky. Run them locally with `cargo test -- --ignored --test-threads=1`.
+      - name: Tests
+        run: cargo test --locked --all-targets
+
+      - name: Release build
+        run: cargo build --locked --release

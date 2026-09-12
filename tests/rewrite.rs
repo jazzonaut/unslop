@@ -1,6 +1,7 @@
 //! The model pass must improve on the deterministic result or get out of the
 //! way. It is never allowed to make things worse.
 
+use unslop::facts::Violation;
 use unslop::{
     config::{Config, Mode},
     doc::Doc,
@@ -357,7 +358,10 @@ fn a_summary_is_told_how_long_and_that_it_may_drop_facts() {
     // Very short text is not asked to shrink below what it can say.
     let short = rewrite::condense_prompt(Mode::Tldr, "Ship it on Monday.", 0);
     assert!(short.contains("about 4 words"), "{short}");
-    assert!(!short.contains("[[F"), "no protected values, no placeholder rule");
+    assert!(
+        !short.contains("[[F"),
+        "no protected values, no placeholder rule"
+    );
 
     // Simplify is asked for every value even though `restore_subset` forgives
     // a dropped one: the prompt states the goal, the check states the minimum.
@@ -459,7 +463,10 @@ fn a_real_summary_is_short_and_keeps_the_facts_it_mentions() {
         Err(err) => panic!("summary rejected: {err}"),
     };
     println!("\n--- SUMMARY ---\n{out}\n");
-    assert!(out.chars().count() < long.chars().count() / 2, "not much of a summary: {out}");
+    assert!(
+        out.chars().count() < long.chars().count() / 2,
+        "not much of a summary: {out}"
+    );
     // Whatever it kept, it kept exactly. Restore guarantees this.
     for fact in ["March 12", "\u{a3}4,500", "billing@example.com"] {
         if out.contains(&fact[..3]) {
@@ -543,7 +550,10 @@ fn a_headings_invisible_permalink_is_not_a_fact_to_protect() {
     // and the model was then asked to copy a token it had every reason to drop
     // after rewriting the heading. Every simplify of a GitHub page failed with
     // "protected value 0 was dropped".
-    use unslop::{facts::Protected, markdown::{Shape, from_html}};
+    use unslop::{
+        facts::Protected,
+        markdown::{Shape, from_html},
+    };
 
     let html = "<h1>Unslop</h1>                <a id=\"user-content-unslop\" class=\"anchor\"                 href=\"https://github.com/jazzonaut/unslop#unslop\"></a>                <p>Copy some text, press a hotkey.</p>";
     let markdown = from_html(html).expect("markdown");
@@ -568,21 +578,51 @@ fn every_shape_the_guard_counts_is_named_in_the_prompt() {
     // the prompt does not insist on is a rejection the user can do nothing
     // about but press Retry.
     let cases = [
-        ("- one
+        (
+            "- one
 - two
-", "bullet points"),
-        ("See the [releases page](https://example.com/releases).", "link"),
-        ("| Item | Cost |
+",
+            "bullet points",
+        ),
+        (
+            "See the [releases page](https://example.com/releases).",
+            "link",
+        ),
+        (
+            "| Item | Cost |
 | --- | --- |
 | Build | 10 |
-", "table"),
+",
+            "table",
+        ),
     ];
     for (text, named) in cases {
         for prompt in [
             rewrite::condense_prompt(Mode::Simplify, text, 0),
             rewrite::system_prompt(&rules(), text, 0),
         ] {
-            assert!(prompt.contains(named), "{named} went unmentioned in {prompt}");
+            assert!(
+                prompt.contains(named),
+                "{named} went unmentioned in {prompt}"
+            );
         }
     }
+}
+
+#[test]
+fn only_a_refusal_a_second_draw_could_fix_gets_one() {
+    use unslop::rewrite::Rejected;
+
+    // Sampling is not deterministic, so these are a bad draw rather than a
+    // text the model cannot do: on the page that prompted this, a second draw
+    // took simplify from 7 passes in 10 to 12 in 14.
+    assert!(Rejected::Structure("the links were lost").worth_another_draw());
+    assert!(Rejected::Facts(Violation::Missing(0)).worth_another_draw());
+
+    // A text that will not fit and a server that is not answering are not
+    // going to change their minds, and the tells have their own repair pass
+    // which has already run.
+    assert!(!Rejected::TooLong.worth_another_draw());
+    assert!(!Rejected::Model("no server".to_owned()).worth_another_draw());
+    assert!(!Rejected::Style("the tells are still there").worth_another_draw());
 }

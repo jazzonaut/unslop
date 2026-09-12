@@ -33,6 +33,24 @@ pub enum Rejected {
     Model(String),
 }
 
+impl Rejected {
+    /// Whether asking the model again could plausibly do better.
+    ///
+    /// Sampling is not deterministic, so most refusals are a bad draw rather
+    /// than a text the model cannot handle.
+    pub fn worth_another_draw(&self) -> bool {
+        match self {
+            // Nothing a second attempt can do about a text that will not fit
+            // or a server that is not answering.
+            Rejected::TooLong | Rejected::Model(_) => false,
+            // The tells have their own repair pass, which has already run and
+            // already declined to improve on this.
+            Rejected::Style(_) => false,
+            Rejected::Structure(_) | Rejected::Facts(_) => true,
+        }
+    }
+}
+
 impl fmt::Display for Rejected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -77,7 +95,7 @@ pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
 fn editing_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
     let shape = shape_rule(text);
-        let issues = issue_list(findings, 24);
+    let issues = issue_list(findings, 24);
 
     format!(
         "You are an experienced editor. Rewrite the text so it reads as if a \
@@ -119,7 +137,7 @@ pub fn condense_prompt(mode: Mode, text: &str, protected: usize) -> String {
 fn simplify_prompt(text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
     let shape = shape_rule(text);
-        format!(
+    format!(
         "You are an experienced editor. Rewrite the text in plain language for a busy, \
          intelligent reader who is not a specialist: short sentences, common words, one \
          idea per sentence. Replace or briefly explain jargon where the meaning allows, \
@@ -300,7 +318,7 @@ fn issue_list(findings: &[Finding], limit: usize) -> String {
 fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
     let shape = shape_rule(text);
-        let targets: String = findings
+    let targets: String = findings
         .iter()
         .take(16)
         .map(|finding| format!("- \"{}\"\n", finding.matched))
@@ -362,49 +380,54 @@ fn unslop(
     let baseline_score = gate_score(&baseline_findings);
 
     let protected = Protected::new(baseline_markdown);
-    let answer = send(
+    let prompt = editing_prompt(&baseline_findings, baseline_markdown, protected.count());
+    let answer = send(config, port, &prompt, &protected.text)?;
+
+    with_second_draw(
         config,
         port,
-        &editing_prompt(&baseline_findings, baseline_markdown, protected.count()),
+        &prompt,
         &protected.text,
-    )?;
+        answer.trim(),
+        |answer| {
+            let mut edited = protected.restore(answer).map_err(Rejected::Facts)?;
+            validate_text_answer(baseline_markdown, &edited)?;
 
-    let mut edited = protected.restore(answer.trim()).map_err(Rejected::Facts)?;
-    validate_text_answer(baseline_markdown, &edited)?;
+            // One focused repair attempt, never a loop. A repair is kept only if it
+            // removed something it was asked to remove, so a model that rewords at
+            // random cannot spend the attempt making the text worse. Vocabulary counts
+            // as progress here even though the gate below ignores it: dropping
+            // "delve" is a win, it is only failing to drop it that is forgivable.
+            let surviving = rules.detect(&edited);
+            if let Some(repaired) = try_repair(config, port, &edited, &surviving)
+                && repair_score(&rules.detect(&repaired)) < repair_score(&surviving)
+            {
+                edited = repaired;
+            }
 
-    // One focused repair attempt, never a loop. A repair is kept only if it
-    // removed something it was asked to remove, so a model that rewords at
-    // random cannot spend the attempt making the text worse. Vocabulary counts
-    // as progress here even though the gate below ignores it: dropping
-    // "delve" is a win, it is only failing to drop it that is forgivable.
-    let surviving = rules.detect(&edited);
-    if let Some(repaired) = try_repair(config, port, &edited, &surviving)
-        && repair_score(&rules.detect(&repaired)) < repair_score(&surviving)
-    {
-        edited = repaired;
-    }
+            let candidate = candidate_doc(doc, edited);
 
-    let candidate = candidate_doc(doc, edited);
+            // The deterministic pass runs again over the model's output. It reintroduces
+            // the very tells the first pass removed, em dashes above all, and this is
+            // free and the only way to be sure.
+            let final_doc = rules.clean_doc(&candidate).doc;
 
-    // The deterministic pass runs again over the model's output. It reintroduces
-    // the very tells the first pass removed, em dashes above all, and this is
-    // free and the only way to be sure.
-    let final_doc = rules.clean_doc(&candidate).doc;
+            validate_structure(doc, baseline_markdown, &final_doc)?;
 
-    validate_structure(doc, baseline_markdown, &final_doc)?;
+            let final_markdown = markdown_from_doc(&final_doc)?;
+            check_length(baseline_markdown, &final_markdown)?;
 
-    let final_markdown = markdown_from_doc(&final_doc)?;
-    check_length(baseline_markdown, &final_markdown)?;
+            // A rewrite that left every structural tell standing did not do the job.
+            // Vocabulary is not counted here, only shapes: see `gate_score`.
+            if baseline_score > 0 && gate_score(&rules.detect(&final_markdown)) >= baseline_score {
+                return Err(Rejected::Style(
+                    "the model left the structural tells in place",
+                ));
+            }
 
-    // A rewrite that left every structural tell standing did not do the job.
-    // Vocabulary is not counted here, only shapes: see `gate_score`.
-    if baseline_score > 0 && gate_score(&rules.detect(&final_markdown)) >= baseline_score {
-        return Err(Rejected::Style(
-            "the model left the structural tells in place",
-        ));
-    }
-
-    Ok(final_doc)
+            Ok(final_doc)
+        },
+    )
 }
 
 /// Simplify or summarise, with the checks that still make sense for a text
@@ -432,26 +455,82 @@ fn condense(
     let protected = Protected::new(baseline_markdown);
     let prompt = condense_prompt(mode, baseline_markdown, protected.count());
     let answer = send(config, port, &prompt, &protected.text)?;
-    let answer = answer.trim();
 
-    let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
-    let edited = keep_paragraphs(baseline_markdown, &edited);
+    with_second_draw(
+        config,
+        port,
+        &prompt,
+        &protected.text,
+        answer.trim(),
+        |answer| {
+            let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
+            let edited = keep_paragraphs(baseline_markdown, &edited);
 
-    if is_commentary(baseline_markdown, &edited) {
-        return Err(Rejected::Structure(
-            "the rewrite talked about the task instead of doing it",
-        ));
-    }
-    match mode {
-        Mode::Tldr => check_shorter(baseline_markdown, &edited)?,
-        _ => check_length(baseline_markdown, &edited)?,
-    }
+            if is_commentary(baseline_markdown, &edited) {
+                return Err(Rejected::Structure(
+                    "the rewrite talked about the task instead of doing it",
+                ));
+            }
+            match mode {
+                Mode::Tldr => check_shorter(baseline_markdown, &edited)?,
+                _ => check_length(baseline_markdown, &edited)?,
+            }
 
-    let final_doc = rules.clean_doc(&candidate_doc(doc, edited)).doc;
-    if mode == Mode::Simplify {
-        validate_structure(doc, baseline_markdown, &final_doc)?;
+            let final_doc = rules.clean_doc(&candidate_doc(doc, edited)).doc;
+            if mode == Mode::Simplify {
+                validate_structure(doc, baseline_markdown, &final_doc)?;
+            }
+            Ok(final_doc)
+        },
+    )
+}
+
+/// One more attempt for a rewrite the validators refused, and never a loop.
+///
+/// Every guard here is a tripwire on the whole result: one dropped link or one
+/// over-cut paragraph and an otherwise good rewrite is thrown away. That is
+/// what made each new document shape find a fresh hole, answered one prompt
+/// rule at a time.
+///
+/// What it is not is a repair. Handing the model its own rejected answer, the
+/// original text and the guard's complaint rescued 0 of 4 refusals on the page
+/// this was built for, where a plain second draw of the same prompt passes
+/// about 7 times in 10: the model that has just dropped a link does not put it
+/// back when asked, it writes the paragraph again without it. So the rejection
+/// buys a second sample rather than a conversation.
+///
+/// The answer is validated by the same closure, so a second draw that fixes
+/// the link but mangles a figure is discarded like any other bad answer, and
+/// the first rejection is what the user is told about.
+///
+/// Measured on that page, fourteen simplify runs: 7 in 10 passed without this,
+/// 12 in 14 with it. The cost falls on the refusals alone, and in unslop mode
+/// the closure carries its own repair attempt, so a refused rewrite there can
+/// reach four calls and took 57 seconds at its worst against 13 typical. That
+/// is affordable here and nowhere else: the rules result is on screen from the
+/// first moment, so the wait costs the user nothing they were using.
+fn with_second_draw<F>(
+    config: &Config,
+    port: Option<u16>,
+    prompt: &str,
+    body: &str,
+    answer: &str,
+    finish: F,
+) -> Result<Doc, Rejected>
+where
+    F: Fn(&str) -> Result<Doc, Rejected>,
+{
+    let refused = match finish(answer) {
+        Ok(doc) => return Ok(doc),
+        Err(refused) => refused,
+    };
+    if !refused.worth_another_draw() {
+        return Err(refused);
     }
-    Ok(final_doc)
+    match send(config, port, prompt, body) {
+        Ok(second) => finish(second.trim()).map_err(|_| refused),
+        Err(_) => Err(refused),
+    }
 }
 
 /// Best-effort one-shot repair, or nothing when there is nothing to ask about.
@@ -687,7 +766,9 @@ pub fn check_shorter(before: &str, after: &str) -> Result<(), Rejected> {
         return Err(Rejected::Structure("the summary came back empty"));
     }
     if after.chars().count() >= before.chars().count() {
-        return Err(Rejected::Structure("the summary is no shorter than the text"));
+        return Err(Rejected::Structure(
+            "the summary is no shorter than the text",
+        ));
     }
     Ok(())
 }

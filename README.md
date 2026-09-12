@@ -19,9 +19,8 @@ provider.
    better rewrite. Anything that cannot be verified is rejected and the
    baseline stands.
 4. **Preview.** A popup appears without taking focus, so `Ctrl+V` still lands
-   in whatever you were working in. It shows a word-level diff, and lets you
-   switch between the rules-only result and the model's. A dropdown in the
-   footer picks what the model does: **Unslop** strips the tells and keeps
+   in whatever you were working in. It shows a word-level diff against what
+   you copied. A dropdown in the footer picks what the model does: **Unslop** strips the tells and keeps
    everything else, **Simplify** rewrites in plain language with the
    repetition cut, and **tl;dr** condenses to about a quarter of the length.
    Changing it redoes the text on show, and the choice is remembered.

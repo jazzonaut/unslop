@@ -29,17 +29,11 @@ use crate::{
 /// Long enough to cover loading 8B of weights from a cold start.
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// The deterministic side of the version toggle, named after where it goes.
-/// The model's side is named per mode, see `Wording`.
-const RULES_LABEL: &str = "Rules only";
-
 /// What the popup calls things in each mode.
 struct Wording {
     /// The status pill while the model runs, and once it has finished.
     working: &'static str,
     done: &'static str,
-    /// The model's version, as the toggle offers it and the footer credits it.
-    model: &'static str,
     /// The status pill when the mode needs a model and there is none.
     no_model: &'static str,
 }
@@ -49,19 +43,16 @@ fn wording(mode: Mode) -> Wording {
         Mode::Unslop => Wording {
             working: "Unslopping\u{2026}",
             done: "Unslopped",
-            model: "Model rewrite",
             no_model: "Unslopped",
         },
         Mode::Simplify => Wording {
             working: "Simplifying\u{2026}",
             done: "Simplified",
-            model: "Simplified",
             no_model: "No model to simplify with, rules only",
         },
         Mode::Tldr => Wording {
             working: "Summarising\u{2026}",
             done: "Summarised",
-            model: "Summary",
             no_model: "No model to summarise with, rules only",
         },
     }
@@ -90,21 +81,13 @@ pub struct App {
     /// Rises with every hotkey press, so a slow rewrite belonging to an older
     /// press can be recognised and discarded.
     active_job: u64,
-    /// The deterministic result, which the model is never allowed to destroy.
+    /// The deterministic result, shown until the model improves on it.
     baseline: Option<Doc>,
     /// What was on the clipboard before anything touched it, kept only as text
     /// because that is all the diff compares.
     original: String,
-    /// The model's version, kept after it lands so switching back to the
-    /// deterministic one is a view change rather than a decision.
-    rewritten: Option<Doc>,
-    /// Which of the two the preview is showing.
-    showing_baseline: bool,
     /// What is on show, and therefore what an explicit copy should publish.
     shown: Option<Doc>,
-    /// How much slop the deterministic pass fixed, kept so the footer can
-    /// still say so once the model's version has replaced the text.
-    fixes: usize,
     /// The clipboard sequence number we last acted on, so the poll can tell a
     /// fresh Ctrl+C from our own Copy.
     seen_clipboard: u32,
@@ -122,10 +105,7 @@ impl App {
             active_job: 0,
             baseline: None,
             original: String::new(),
-            rewritten: None,
-            showing_baseline: true,
             shown: None,
-            fixes: 0,
             seen_clipboard: 0,
         }
     }
@@ -163,10 +143,8 @@ impl App {
             }
         };
 
-        let cleaned = self.rules.clean_doc(&doc);
         self.original = doc.text().to_owned();
-        self.baseline = Some(cleaned.doc);
-        self.fixes = cleaned.fixes;
+        self.baseline = Some(self.rules.clean_doc(&doc).doc);
         self.begin(popup, proxy);
     }
 
@@ -177,8 +155,6 @@ impl App {
             return;
         };
         self.shown = Some(baseline.clone());
-        self.rewritten = None;
-        self.showing_baseline = true;
         self.active_job += 1;
 
         // The rules pass is instant, so without saying that a second pass is
@@ -192,9 +168,8 @@ impl App {
             (false, _) => (Phase::Warn, words.no_model),
         };
 
-        popup.show(&baseline, &self.original, &self.detail("rules"));
+        popup.show(&baseline, &self.original);
         popup.set_phase(phase.0, phase.1);
-        popup.set_toggle(None);
         popup.set_mode(self.mode);
         popup.set_install(self.install_button(), self.note());
     }
@@ -237,17 +212,11 @@ impl App {
         // flight from an earlier press cannot land on top of the message.
         self.active_job += 1;
         self.baseline = None;
-        self.rewritten = None;
         self.shown = None;
         self.original.clear();
-        self.fixes = 0;
-        self.showing_baseline = true;
 
-        // No footer detail: there were no fixes to count, and the page hides
-        // that pill when it is empty.
-        popup.show(&Doc::Plain(String::new()), "", "");
+        popup.show(&Doc::Plain(String::new()), "");
         popup.set_phase(Phase::Warn, message);
-        popup.set_toggle(None);
         popup.set_install(self.install_button(), self.note());
     }
 
@@ -258,12 +227,6 @@ impl App {
         [self.idle_deadline(), poll].into_iter().flatten().min()
     }
 
-    /// The footer line: what the deterministic pass did, and which pass the
-    /// text now on show came from.
-    fn detail(&self, source: &str) -> String {
-        format!("{} \u{b7} {source}", fixes(self.fixes))
-    }
-
     /// Publish a rewrite, unless a newer hotkey press has superseded it.
     pub fn on_rewrite(&mut self, popup: &Popup, job: u64, result: Result<Doc, String>) {
         if job != self.active_job {
@@ -271,43 +234,19 @@ impl App {
         }
         match result {
             Ok(doc) => {
-                let words = wording(self.mode);
-                popup.update(&doc, &self.original, &self.detail(&words.model.to_lowercase()));
-                popup.set_phase(Phase::Done, words.done);
-                popup.set_toggle(Some(RULES_LABEL));
-                self.showing_baseline = false;
-                self.rewritten = Some(doc.clone());
+                popup.update(&doc, &self.original);
+                popup.set_phase(Phase::Done, wording(self.mode).done);
                 self.shown = Some(doc);
             }
             // The baseline is already on show, so a failure costs nothing but
             // an explanation.
             Err(err) => {
                 if let Some(baseline) = &self.baseline {
-                    popup.update(baseline, &self.original, &self.detail("rules"));
+                    popup.update(baseline, &self.original);
                 }
                 popup.set_phase(Phase::Warn, &err);
             }
         }
-    }
-
-    /// Switch the preview between the deterministic result and the model's.
-    ///
-    /// Both are kept, so changing your mind about which one was better costs
-    /// nothing and works in either direction.
-    pub fn on_toggle_version(&mut self, popup: &Popup) {
-        let model = wording(self.mode).model;
-        let (other, source, label) = if self.showing_baseline {
-            (&self.rewritten, model.to_lowercase(), RULES_LABEL)
-        } else {
-            (&self.baseline, "rules".to_owned(), model)
-        };
-        let Some(doc) = other.clone() else {
-            return;
-        };
-        self.showing_baseline = !self.showing_baseline;
-        popup.update(&doc, &self.original, &self.detail(&source));
-        popup.set_toggle(Some(label));
-        self.shown = Some(doc);
     }
 
     /// Put the result on show on the clipboard. The only thing that writes to
@@ -446,13 +385,5 @@ pub fn setup_note(config: &Config, install: Option<String>, has_backend: bool) -
         // "Unslopped" with no hint that the model pass never happened.
         Provider::Local => install
             .or_else(|| (!has_backend).then(|| "no GPU backend found, rules only".to_owned())),
-    }
-}
-
-fn fixes(count: usize) -> String {
-    match count {
-        0 => "No obvious slop".to_owned(),
-        1 => "Fixed 1 slop".to_owned(),
-        n => format!("Fixed {n} slops"),
     }
 }

@@ -3,7 +3,8 @@
 //! An 8B asked to rewrite raw HTML returns broken markup. Markdown it handles
 //! well, so rich text makes a round trip through it. The trade is that inline
 //! styles, fonts and merged cells are flattened: tables, lists, links, headings
-//! and emphasis survive, and "Rules only" remains the lossless answer.
+//! and emphasis survive, and the original is still on the clipboard until
+//! Copy is pressed.
 
 use pulldown_cmark::{Options, Parser};
 
@@ -74,7 +75,7 @@ impl Shape {
 /// case rather than the exotic one.
 ///
 /// The cost is that the first row renders as a header afterwards. That is a
-/// far smaller loss than the table disappearing, and "Rules only" undoes it.
+/// far smaller loss than the table disappearing.
 pub fn promote_table_headers(html: &str) -> String {
     use html5ever::{QualName, local_name, namespace_url, ns};
     use kuchikiki::{NodeRef, traits::*};

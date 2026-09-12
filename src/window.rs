@@ -87,7 +87,6 @@ impl Popup {
                 let message = match body {
                     "activate" => Message::Activate,
                     "install" => Message::InstallModel,
-                    "toggle" => Message::ToggleVersion,
                     "copy" => Message::Copy,
                     "drag" => Message::Drag,
                     "maximize" => Message::Maximize,
@@ -123,8 +122,8 @@ impl Popup {
     }
 
     /// Show the popup with `doc` rendered, leaving focus where it is.
-    pub fn show(&self, doc: &Doc, original: &str, status: &str) {
-        self.update(doc, original, status);
+    pub fn show(&self, doc: &Doc, original: &str) {
+        self.update(doc, original);
         // A fresh clipboard deserves a fresh view, whatever the last press
         // was left showing.
         self.run("setDiff(false)");
@@ -137,12 +136,11 @@ impl Popup {
     /// The diff is rendered here rather than on demand so that toggling the
     /// view costs no round trip, and so a rewrite landing while the diff is
     /// open updates what is on screen.
-    pub fn update(&self, doc: &Doc, original: &str, status: &str) {
+    pub fn update(&self, doc: &Doc, original: &str) {
         self.run(&format!(
-            "setContent({}, {}, {})",
+            "setContent({}, {})",
             json(Some(&render::preview(doc))),
             json(Some(&render::diff(original, doc.text()))),
-            json(Some(status)),
         ));
     }
 
@@ -174,11 +172,6 @@ impl Popup {
     /// when the page first comes up.
     pub fn set_mode(&self, mode: Mode) {
         self.run(&format!("setMode({})", json(Some(mode.as_str()))));
-    }
-
-    /// Offer the other version of the text, or nothing when there is only one.
-    pub fn set_toggle(&self, label: Option<&str>) {
-        self.run(&format!("setToggle({})", json(label)));
     }
 
     /// Refresh the installation button and note, which change while the

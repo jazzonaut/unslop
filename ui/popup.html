@@ -85,10 +85,6 @@
   /* Motion is the point: a still dot would look like another finished state. */
   .working .dot { animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.25; transform: scale(0.7); } }
-  .tick { display: none; }
-  .done .tick { display: block; }
-  .done #detail .dot { display: none; }
-
   /* A second, wordless signal that work is still running. */
   #progress {
     position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
@@ -128,7 +124,9 @@
     flex: none; display: flex; align-items: center; gap: 8px;
     padding: 8px 10px; background: var(--chrome); border-top: 1px solid var(--line);
   }
-  #detail.blank { display: none; }
+  /* The setup line: a privacy or install warning, or nothing at all. */
+  #detail { font-size: 12px; color: var(--muted); }
+  #detail:empty { display: none; }
   button:not(.win) {
     font: inherit; font-weight: 550; font-size: 13px;
     display: inline-flex; align-items: center; gap: 7px;
@@ -136,6 +134,7 @@
     border: 1px solid var(--line); background: var(--chrome); color: var(--ink);
   }
   button:not(.win):hover { background: var(--hover); }
+  #diff, #copy { min-width: 84px; justify-content: center; }
   button.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
   button.primary:hover { filter: brightness(1.08); background: var(--brand); }
   #install:not([hidden]) { border-color: var(--brand); color: var(--brand); }
@@ -173,42 +172,30 @@
   <main id="content"></main>
 
   <footer>
-    <div id="detail" class="pill blank">
-      <i class="dot"></i>
-      <svg class="tick" width="13" height="13" viewBox="0 0 16 16" fill="none"
-           stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="8" cy="8" r="6.6"/><path d="M5.2 8.2l2 2 3.6-4"/>
-      </svg>
-      <span id="detail-text"></span>
-    </div>
-    <div class="spacer"></div>
     <select id="mode" title="What the model pass does" onchange="send('mode:' + this.value)">
       <option value="unslop">Unslop</option>
       <option value="simplify">Simplify</option>
       <option value="tldr">tl;dr</option>
     </select>
+    <span id="detail"></span>
+    <div class="spacer"></div>
     <button id="install" hidden onclick="send('install')"></button>
-    <button id="toggle" hidden onclick="send('toggle')"></button>
     <button id="diff" onclick="setDiff(!showingDiff)">Diff</button>
-    <button class="primary" onclick="send('copy')">Copy</button>
+    <button id="copy" class="primary" onclick="send('copy')">Copy</button>
   </footer>
 
   <script>
     const send = (msg) => window.ipc.postMessage(msg);
     const el = (id) => document.getElementById(id);
     // Called from Rust with already-sanitised markup.
-    let detail = '';
-    let note = '';
     let result = '';
     let diff = '';
     let showingDiff = false;
 
-    function setContent(html, diffHtml, text) {
+    function setContent(html, diffHtml) {
       result = html;
       diff = diffHtml;
-      detail = text;
       paintContent();
-      paintDetail();
     }
     // The headline state: which of the two passes is running, or done.
     function setPhase(phase, label) {
@@ -232,23 +219,10 @@
       const button = el('install');
       button.hidden = !label;
       button.textContent = label || '';
-      note = text || '';
-      paintDetail();
+      el('detail').textContent = text || '';
     }
     function setMode(mode) {
       el('mode').value = mode;
-    }
-    // Labelled by Rust with wherever the button now goes, since the preview
-    // switches between the two versions in both directions.
-    function setToggle(label) {
-      const button = el('toggle');
-      button.hidden = !label;
-      button.textContent = label || '';
-    }
-    function paintDetail() {
-      const text = [detail, note].filter(Boolean).join(' · ');
-      el('detail-text').textContent = text;
-      el('detail').classList.toggle('blank', !text);
     }
 
     // Dragging the window, now that there is no system caption to grab. A

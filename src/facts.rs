@@ -5,9 +5,10 @@
 //! placeholder first, so the model never sees it and cannot alter it, and the
 //! original bytes are put back afterwards.
 //!
-//! If a placeholder does not survive intact, the rewrite is rejected rather
-//! than patched up: a model that dropped one has almost certainly rearranged
-//! the sentence around it too.
+//! A value that comes back altered, repeated or invented is never patched
+//! up: the rewrite is rejected and the baseline stands. Whether a value may
+//! be left out entirely is the caller's decision, since a mode whose job is
+//! to shorten the text has every right to drop one: see `restore_subset`.
 
 use std::{collections::HashMap, fmt, sync::LazyLock};
 
@@ -113,9 +114,9 @@ impl Protected {
         self.restore_with(rewritten, false)
     }
 
-    /// As `restore`, for a summary: a value may be left out, since condensing
-    /// the text is the job, but one that is kept must be the original bytes and
-    /// none may be repeated or invented.
+    /// As `restore`, for the condensing modes: a value may be left out, since
+    /// shortening the text is the job, but one that is kept must be the
+    /// original bytes and none may be repeated or invented.
     pub fn restore_subset(&self, rewritten: &str) -> Result<String, Violation> {
         self.restore_with(rewritten, true)
     }

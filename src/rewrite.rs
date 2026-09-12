@@ -391,8 +391,14 @@ fn unslop(
 /// No checklist and no repair pass: the tells are not the job here, and the
 /// rules pass over the output catches the ones the model brings along. A
 /// summary is also excused the structure check, since dropping a table is what
-/// it was asked to do, and may leave protected values out as long as the ones
-/// it keeps are untouched. Simplify keeps both checks: every point stays.
+/// it was asked to do. Simplify keeps that one: every point stays.
+///
+/// Neither is required to carry every protected value through. The prompts
+/// still ask for all of them, and what matters is that a value which does
+/// survive is the original bytes: a figure quietly rounded is the damage this
+/// module exists to prevent, and a figure left out is visible in the preview.
+/// Rejecting a whole good rewrite over one dropped value only taught the user
+/// to press Retry until the model humoured us.
 fn condense(
     rules: &Rules,
     doc: &Doc,
@@ -406,11 +412,7 @@ fn condense(
     let answer = send(config, port, &prompt, &protected.text)?;
     let answer = answer.trim();
 
-    let edited = match mode {
-        Mode::Tldr => protected.restore_subset(answer),
-        _ => protected.restore(answer),
-    }
-    .map_err(Rejected::Facts)?;
+    let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
     let edited = keep_paragraphs(baseline_markdown, &edited);
 
     if is_commentary(baseline_markdown, &edited) {

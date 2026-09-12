@@ -359,7 +359,8 @@ fn a_summary_is_told_how_long_and_that_it_may_drop_facts() {
     assert!(short.contains("about 4 words"), "{short}");
     assert!(!short.contains("[[F"), "no protected values, no placeholder rule");
 
-    // Simplify keeps every point, so it keeps the strict rule.
+    // Simplify is asked for every value even though `restore_subset` forgives
+    // a dropped one: the prompt states the goal, the check states the minimum.
     let simplify = rewrite::condense_prompt(Mode::Simplify, &text, 1);
     assert!(simplify.contains("Never drop"), "{simplify}");
     assert!(simplify.contains("Keep lists, tables"), "{simplify}");

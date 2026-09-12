@@ -76,8 +76,8 @@ pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
 /// which is a fact it invented.
 fn editing_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
-    let list = list_rule(text);
-    let issues = issue_list(findings, 24);
+    let shape = shape_rule(text);
+        let issues = issue_list(findings, 24);
 
     format!(
         "You are an experienced editor. Rewrite the text so it reads as if a \
@@ -91,8 +91,8 @@ fn editing_prompt(findings: &[Finding], text: &str, protected: usize) -> String 
          - Cut empty words rather than replacing them. A shorter sentence is fine.\n\
          - Sentences with none of the listed words may stay as they are.\n\
          - Keep lists, tables, links and headings as they are.\n\
-         {list}\
-         {placeholders}\
+         {shape}\
+                  {placeholders}\
          - Return only the rewritten text, no preamble and no commentary."
     )
 }
@@ -118,8 +118,8 @@ pub fn condense_prompt(mode: Mode, text: &str, protected: usize) -> String {
 
 fn simplify_prompt(text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
-    let list = list_rule(text);
-    format!(
+    let shape = shape_rule(text);
+        format!(
         "You are an experienced editor. Rewrite the text in plain language for a busy, \
          intelligent reader who is not a specialist: short sentences, common words, one \
          idea per sentence. Replace or briefly explain jargon where the meaning allows, \
@@ -130,8 +130,8 @@ fn simplify_prompt(text: &str, protected: usize) -> String {
          Rules:\n\
          - Keep every fact and claim, including qualifiers such as \"about\", \"roughly\" and \"likely\". Add nothing.\n\
          - Keep lists, tables, links and headings; simplify the words inside them.\n\
-         {list}\
-         - Keep the paragraph breaks of the text. Do not put each sentence on its own line.\n\
+         {shape}\
+                  - Keep the paragraph breaks of the text. Do not put each sentence on its own line.\n\
          {placeholders}\
          - Return only the rewritten text, no preamble and no commentary."
     )
@@ -204,31 +204,53 @@ pub fn keep_paragraphs(baseline: &str, edited: &str) -> String {
         .join("\n\n")
 }
 
-/// Name the bullet count, because "keep lists" does not survive contact with a
-/// 4B. Both prompts said it and both lost lists: measured over four bulleted
-/// texts, Simplify was refused in every run and unslop in every run of the one
-/// with plain unstyled dashes. Simplify is the worse of the two because it also
-/// asks for short sentences and one idea per sentence, which the model obeys by
-/// turning each bullet into a sentence. Naming the count takes both to 0
-/// rejections in 32 runs. The count is counted the way `validate_structure`
-/// counts it, so the prompt asks for exactly what the guard enforces.
+/// What must survive, stated from the same `Shape` the guard measures.
 ///
-/// Nothing more may go in this rule. A list lead-in such as "Key takeaways from
-/// the quarter:" is dropped by Simplify in every run, and it is not worth what
-/// fixing it costs: adding a second rule to keep it took plain dashes back to 4
-/// rejections in 4, and folding the same thing in as one extra clause was worse
-/// again, 10 rejections across 16 runs. More instruction, less obedience, the
-/// same way the checklist found it.
-fn list_rule(text: &str) -> String {
-    match markdown::Shape::of_html(&markdown::to_html(text)).list_items {
-        0 => String::new(),
-        n => format!(
-            "- The text contains {n} bullet points. Return the same {n} bullet points, \
-             each on its own line starting with \"- \". Shorten the words inside a bullet \
-             point, but never turn one into a sentence of a paragraph, and never turn a \
-             heading, a lead-in line or a paragraph into a bullet point.\n"
-        ),
+/// "Keep lists, tables and links" is the kind of abstract instruction this
+/// model reads straight past: measured on two bulleted texts it flattened the
+/// list into prose in 10 of 10 runs, and on a page with one link in it it
+/// dropped the link in 7 of 8. Naming the count keeps them.
+///
+/// Built by destructuring `Shape` rather than written out a dimension at a
+/// time, so a field the guard counts cannot go unmentioned here: that gap is
+/// exactly what refused every rewrite of a page with a link in it while the
+/// prompt said only "keep links". Adding a field to `Shape` stops compiling
+/// until this says what to do with it.
+fn shape_rule(text: &str) -> String {
+    let markdown::Shape {
+        tables,
+        links,
+        list_items,
+    } = markdown::Shape::of_html(&markdown::to_html(text));
+
+    let mut rules = String::new();
+    if list_items > 0 {
+        rules += &format!(
+            "- The text contains {list_items} bullet points. Return the same \
+             {list_items} bullet points, each on its own line starting with \"- \". \
+             Shorten the words inside a bullet point, but never turn one into a \
+             sentence of a paragraph, and never turn a heading, a lead-in line or a \
+             paragraph into a bullet point.\n"
+        );
     }
+    if links > 0 {
+        rules += &format!(
+            "- The text contains {links} link{plural} written as [text](URL). Return \
+             the same {links}, each still written that way. Shorten the words inside \
+             the square brackets if they need it, and never turn a link into plain \
+             text.\n",
+            plural = if links == 1 { "" } else { "s" },
+        );
+    }
+    if tables > 0 {
+        rules += &format!(
+            "- The text contains {tables} table{plural}. Return the same {tables}, \
+             still as a markdown table with the same rows and columns. Shorten the \
+             words inside a cell, and never flatten a table into prose.\n",
+            plural = if tables == 1 { "" } else { "s" },
+        );
+    }
+    rules
 }
 
 fn placeholder_rule(protected: usize, may_drop: bool) -> String {
@@ -277,8 +299,8 @@ fn issue_list(findings: &[Finding], limit: usize) -> String {
 /// the first edit. It names exactly what was missed and nothing else.
 fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
-    let list = list_rule(text);
-    let targets: String = findings
+    let shape = shape_rule(text);
+        let targets: String = findings
         .iter()
         .take(16)
         .map(|finding| format!("- \"{}\"\n", finding.matched))
@@ -290,8 +312,8 @@ fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
          {targets}\
          Do not swap a listed word for a synonym of the same kind. Say the plain thing, or cut it.\n\
          Keep the meaning, the professional register and the Markdown structure.\n\
-         {list}\
-         Never use an em dash or en dash.\n\
+         {shape}\
+                  Never use an em dash or en dash.\n\
          {placeholders}\
          Return the complete corrected text only."
     )

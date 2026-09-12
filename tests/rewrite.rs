@@ -367,7 +367,7 @@ fn a_summary_is_told_how_long_and_that_it_may_drop_facts() {
 }
 
 #[test]
-fn both_prompts_are_told_how_many_bullet_points_to_return() {
+fn both_prompts_are_told_what_shape_to_return() {
     // "Keep lists" is the kind of abstract instruction this model ignores:
     // measured on two bulleted texts it flattened the list into prose in 10 of
     // 10 runs and every one was refused, where naming the count kept it in 10
@@ -558,4 +558,31 @@ fn a_headings_invisible_permalink_is_not_a_fact_to_protect() {
     let real = "<p>see <a href=\"https://example.com\">the docs</a></p>";
     assert_eq!(Shape::of_html(real).links, 1);
     assert_eq!(Protected::new(&from_html(real).unwrap()).count(), 1);
+}
+
+#[test]
+fn every_shape_the_guard_counts_is_named_in_the_prompt() {
+    // The bug this rules out: `validate_structure` refused a rewrite for
+    // losing the one link on the page while the prompt only said "keep links",
+    // which this model reads straight past. A dimension the guard counts and
+    // the prompt does not insist on is a rejection the user can do nothing
+    // about but press Retry.
+    let cases = [
+        ("- one
+- two
+", "bullet points"),
+        ("See the [releases page](https://example.com/releases).", "link"),
+        ("| Item | Cost |
+| --- | --- |
+| Build | 10 |
+", "table"),
+    ];
+    for (text, named) in cases {
+        for prompt in [
+            rewrite::condense_prompt(Mode::Simplify, text, 0),
+            rewrite::system_prompt(&rules(), text, 0),
+        ] {
+            assert!(prompt.contains(named), "{named} went unmentioned in {prompt}");
+        }
+    }
 }

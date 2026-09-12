@@ -142,9 +142,7 @@ impl Protected {
         {
             return Err(Violation::Duplicated(index));
         }
-        if !may_drop
-            && let Some(index) = (0..self.values.len()).find(|i| !seen.contains_key(i))
-        {
+        if !may_drop && let Some(index) = (0..self.values.len()).find(|i| !seen.contains_key(i)) {
             return Err(Violation::Missing(index));
         }
 

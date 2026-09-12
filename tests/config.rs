@@ -26,8 +26,13 @@ fn the_dropdown_is_remembered_the_same_way_as_the_tray_toggle() {
     let saved = with_setting(file, "mode", "\"tldr\"");
     assert_eq!(Config::from_str_for_test(&saved).unwrap().mode, Mode::Tldr);
     assert_eq!(
-        saved.lines().filter(|l| l.trim_start().starts_with('#')).count(),
-        file.lines().filter(|l| l.trim_start().starts_with('#')).count(),
+        saved
+            .lines()
+            .filter(|l| l.trim_start().starts_with('#'))
+            .count(),
+        file.lines()
+            .filter(|l| l.trim_start().starts_with('#'))
+            .count(),
     );
 
     let old = "hotkey = \"CTRL+ALT+KeyU\"\n\n[local]\nidle_unload_mins = 2\n";

@@ -14,7 +14,7 @@
 use std::fmt;
 
 use crate::{
-    config::{Config, Provider},
+    config::{Config, Mode, Provider},
     doc::Doc,
     facts::{self, Protected},
     markdown, model, remote,
@@ -75,7 +75,7 @@ pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
 /// same model lifts a sentence out of the "after" and puts it in the answer,
 /// which is a fact it invented.
 fn editing_prompt(findings: &[Finding], protected: usize) -> String {
-    let placeholders = placeholder_rule(protected);
+    let placeholders = placeholder_rule(protected, false);
     let issues = issue_list(findings, 24);
 
     format!(
@@ -83,11 +83,7 @@ fn editing_prompt(findings: &[Finding], protected: usize) -> String {
          knowledgeable professional wrote it for colleagues: direct, concrete, in \
          ordinary adult vocabulary, with no hype and no rhetoric. Keep the meaning \
          and the professional register. Do not make it sound childish or casual.\n\n\
-         Hard bans:\n\
-         - Never use an em dash or an en dash. Use a comma, a full stop or a hyphen.\n\
-         - Never open with a scene-setting clause such as \"In today's ...\". Start with the point.\n\
-         - Never use the \"not just X, it's Y\" or \"not X, but Y\" contrast in any wording. State Y on its own.\n\
-         - Never begin a sentence with \"In conclusion\", \"Ultimately\" or \"Overall\". Drop the opener and keep the claim.\n\n\
+         {HARD_BANS}\n\
          {issues}\n\
          Rules:\n\
          - Keep every fact and claim, including qualifiers such as \"about\", \"roughly\" and \"likely\". Add nothing.\n\
@@ -99,11 +95,137 @@ fn editing_prompt(findings: &[Finding], protected: usize) -> String {
     )
 }
 
-fn placeholder_rule(protected: usize) -> String {
-    if protected == 0 {
-        String::new()
-    } else {
-        "- Tokens such as [[F00]] are protected values. Copy every one through exactly once, unchanged. Never drop, repeat, alter or invent one.\n".to_owned()
+/// The tells a model reintroduces whatever it was asked to do, so every
+/// prompt carries them.
+const HARD_BANS: &str = "Hard bans:\n\
+- Never use an em dash or an en dash. Use a comma, a full stop or a hyphen.\n\
+- Never open with a scene-setting clause such as \"In today's ...\". Start with the point.\n\
+- Never use the \"not just X, it's Y\" or \"not X, but Y\" contrast in any wording. State Y on its own.\n\
+- Never begin a sentence with \"In conclusion\", \"Ultimately\" or \"Overall\". Drop the opener and keep the claim.\n";
+
+/// The prompt for the two condensing modes. Public for the same reason as
+/// `system_prompt`. `text` sets the length target: a 4B told "about a quarter"
+/// guesses, told "about 60 words" it lands close.
+pub fn condense_prompt(mode: Mode, text: &str, protected: usize) -> String {
+    match mode {
+        Mode::Unslop => unreachable!("unslop builds its prompt from the rule pack"),
+        Mode::Simplify => simplify_prompt(text, protected),
+        Mode::Tldr => summary_prompt(text.split_whitespace().count(), protected),
+    }
+}
+
+fn simplify_prompt(text: &str, protected: usize) -> String {
+    let placeholders = placeholder_rule(protected, false);
+    let list = list_rule(text);
+    format!(
+        "You are an experienced editor. Rewrite the text in plain language for a busy, \
+         intelligent reader who is not a specialist: short sentences, common words, one \
+         idea per sentence. Replace or briefly explain jargon where the meaning allows, \
+         and keep a technical term where there is no plain equivalent. Cut repetition, \
+         asides and filler so the result is shorter, but keep every distinct point. \
+         Keep the professional register: plain is not childish.\n\n\
+         {HARD_BANS}\n\
+         Rules:\n\
+         - Keep every fact and claim, including qualifiers such as \"about\", \"roughly\" and \"likely\". Add nothing.\n\
+         - Keep lists, tables, links and headings; simplify the words inside them.\n\
+         {list}\
+         - Keep the paragraph breaks of the text. Do not put each sentence on its own line.\n\
+         {placeholders}\
+         - Return only the rewritten text, no preamble and no commentary."
+    )
+}
+
+/// Deliberately the shortest prompt in the file. Measured on a status email
+/// whose one sentence said three vendors were done and two were due by a date:
+/// the editor-style prompt above, with its rules block, moved the date onto the
+/// finished vendors in 12 of 12 runs, whatever rule was added about keeping
+/// dates with their claims. This wording got it right in all but one of about
+/// fifteen runs, so the failure is rare rather than gone: a 4B summariser can
+/// still misattach a date, which is one reason the result is previewed before
+/// it is copied. The register and hard-ban rules are not missed here: the rules
+/// pass runs over the output.
+///
+/// The "two or three things" line is what makes it a summary rather than a
+/// trim. Without it a fact-dense email came back at 88, 33 and 58 words from
+/// a 91-word original, keeping every sentence that held a placeholder; with it,
+/// 25 to 33 words, each run leading with the thing the reader has to do.
+fn summary_prompt(words: usize, protected: usize) -> String {
+    let placeholders = placeholder_rule(protected, true);
+    let target = (words / 4).max(25).min(words);
+    format!(
+        "Summarise the text in about {target} words of plain prose for a colleague who has \
+         not read it. Keep only what the text actually says; when a detail does not fit, \
+         leave it out rather than reword it. Keep the two or three things the reader must \
+         know or do and drop everything else. Write sentences, not headings or bullet \
+         points, and keep the technical terms the text uses. Never use an em dash or an \
+         en dash.\n\
+         {placeholders}\
+         Return only the summary."
+    )
+}
+
+/// A 4B asked for short sentences likes to put each on its own line, in two
+/// runs out of three on an ordinary email. When the text had no single line
+/// breaks to begin with, none belong in the result: they are rejoined into the
+/// paragraphs the model was told to keep. Lines that look like list items,
+/// headings or table rows are left alone in case the model built one anyway.
+pub fn keep_paragraphs(baseline: &str, edited: &str) -> String {
+    let single_breaks = |text: &str| {
+        text.split("\n\n")
+            .any(|paragraph| paragraph.trim().contains('\n'))
+    };
+    if single_breaks(&baseline.replace("\r\n", "\n")) {
+        return edited.to_owned();
+    }
+    let is_block = |line: &str| {
+        let line = line.trim_start();
+        line.starts_with(['-', '*', '+', '#', '|', '>'])
+            || line
+                .split_once(". ")
+                .is_some_and(|(number, _)| number.chars().all(|c| c.is_ascii_digit()))
+    };
+    edited
+        .split("\n\n")
+        .map(|paragraph| {
+            let lines: Vec<&str> = paragraph.lines().map(str::trim).collect();
+            if lines.iter().any(|line| is_block(line)) {
+                paragraph.to_owned()
+            } else {
+                lines
+                    .into_iter()
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Name the bullet count, because "keep lists" does not survive contact with a
+/// 4B. Simplify asks for short sentences and one idea per sentence, and the
+/// model obeys that by turning every bullet into a sentence: measured on two
+/// bulleted texts it flattened the list in 10 of 10 runs, where the unslop
+/// prompt, which says "as they are", never does. The count is counted the way
+/// `validate_structure` counts it, so the prompt asks for exactly what the
+/// guard enforces.
+fn list_rule(text: &str) -> String {
+    match markdown::Shape::of_html(&markdown::to_html(text)).list_items {
+        0 => String::new(),
+        n => format!(
+            "- The text contains {n} bullet points. Return the same {n} bullet points, \
+             each on its own line starting with \"- \". Shorten the words inside a bullet \
+             point, but never turn one into a sentence of a paragraph, and never turn a \
+             heading, a lead-in line or a paragraph into a bullet point.\n"
+        ),
+    }
+}
+
+fn placeholder_rule(protected: usize, may_drop: bool) -> String {
+    match (protected, may_drop) {
+        (0, _) => String::new(),
+        (_, false) => "- Tokens such as [[F00]] are protected values. Copy every one through exactly once, unchanged. Never drop, repeat, alter or invent one.\n".to_owned(),
+        (_, true) => "- Tokens such as [[F00]] are protected values. Copy any you keep through exactly once, unchanged, and leave out the rest. Never alter, repeat or invent one.\n".to_owned(),
     }
 }
 
@@ -144,7 +266,7 @@ fn issue_list(findings: &[Finding], limit: usize) -> String {
 /// A deliberately tiny second-pass prompt, used only when strong hits survived
 /// the first edit. It names exactly what was missed and nothing else.
 fn repair_prompt(findings: &[Finding], protected: usize) -> String {
-    let placeholders = placeholder_rule(protected);
+    let placeholders = placeholder_rule(protected, false);
     let targets: String = findings
         .iter()
         .take(16)
@@ -170,22 +292,42 @@ fn repair_prompt(findings: &[Finding], protected: usize) -> String {
 /// text the model is asked to edit.
 ///
 /// Blocking: call from a worker thread.
-pub fn run(rules: &Rules, doc: &Doc, config: &Config, port: Option<u16>) -> Result<Doc, Rejected> {
+pub fn run(
+    rules: &Rules,
+    doc: &Doc,
+    config: &Config,
+    port: Option<u16>,
+    mode: Mode,
+) -> Result<Doc, Rejected> {
     let baseline_markdown = markdown_from_doc(doc)?;
 
     if baseline_markdown.chars().count() > config.rewrite.max_input_chars {
         return Err(Rejected::TooLong);
     }
 
+    match mode {
+        Mode::Unslop => unslop(rules, doc, &baseline_markdown, config, port),
+        Mode::Simplify | Mode::Tldr => condense(rules, doc, &baseline_markdown, config, port, mode),
+    }
+}
+
+/// The checklist-driven edit described at the top of the file.
+fn unslop(
+    rules: &Rules,
+    doc: &Doc,
+    baseline_markdown: &str,
+    config: &Config,
+    port: Option<u16>,
+) -> Result<Doc, Rejected> {
     // Detected against the text the model will actually edit, which is what
     // makes the checklist worth more than a global word list: the pack's
     // fix-less phrases, its tier 2 and 3 vocabulary and all twenty of its
     // regex detectors become exact targets here, and none of them could be
     // stated usefully in advance.
-    let baseline_findings = rules.detect(&baseline_markdown);
+    let baseline_findings = rules.detect(baseline_markdown);
     let baseline_score = gate_score(&baseline_findings);
 
-    let protected = Protected::new(&baseline_markdown);
+    let protected = Protected::new(baseline_markdown);
     let answer = send(
         config,
         port,
@@ -194,7 +336,7 @@ pub fn run(rules: &Rules, doc: &Doc, config: &Config, port: Option<u16>) -> Resu
     )?;
 
     let mut edited = protected.restore(answer.trim()).map_err(Rejected::Facts)?;
-    validate_text_answer(&baseline_markdown, &edited)?;
+    validate_text_answer(baseline_markdown, &edited)?;
 
     // One focused repair attempt, never a loop. A repair is kept only if it
     // removed something it was asked to remove, so a model that rewords at
@@ -215,10 +357,10 @@ pub fn run(rules: &Rules, doc: &Doc, config: &Config, port: Option<u16>) -> Resu
     // free and the only way to be sure.
     let final_doc = rules.clean_doc(&candidate).doc;
 
-    validate_structure(doc, &baseline_markdown, &final_doc)?;
+    validate_structure(doc, baseline_markdown, &final_doc)?;
 
     let final_markdown = markdown_from_doc(&final_doc)?;
-    check_length(&baseline_markdown, &final_markdown)?;
+    check_length(baseline_markdown, &final_markdown)?;
 
     // A rewrite that left every structural tell standing did not do the job.
     // Vocabulary is not counted here, only shapes: see `gate_score`.
@@ -228,6 +370,51 @@ pub fn run(rules: &Rules, doc: &Doc, config: &Config, port: Option<u16>) -> Resu
         ));
     }
 
+    Ok(final_doc)
+}
+
+/// Simplify or summarise, with the checks that still make sense for a text
+/// that is meant to come back shorter.
+///
+/// No checklist and no repair pass: the tells are not the job here, and the
+/// rules pass over the output catches the ones the model brings along. A
+/// summary is also excused the structure check, since dropping a table is what
+/// it was asked to do, and may leave protected values out as long as the ones
+/// it keeps are untouched. Simplify keeps both checks: every point stays.
+fn condense(
+    rules: &Rules,
+    doc: &Doc,
+    baseline_markdown: &str,
+    config: &Config,
+    port: Option<u16>,
+    mode: Mode,
+) -> Result<Doc, Rejected> {
+    let protected = Protected::new(baseline_markdown);
+    let prompt = condense_prompt(mode, baseline_markdown, protected.count());
+    let answer = send(config, port, &prompt, &protected.text)?;
+    let answer = answer.trim();
+
+    let edited = match mode {
+        Mode::Tldr => protected.restore_subset(answer),
+        _ => protected.restore(answer),
+    }
+    .map_err(Rejected::Facts)?;
+    let edited = keep_paragraphs(baseline_markdown, &edited);
+
+    if is_commentary(baseline_markdown, &edited) {
+        return Err(Rejected::Structure(
+            "the rewrite talked about the task instead of doing it",
+        ));
+    }
+    match mode {
+        Mode::Tldr => check_shorter(baseline_markdown, &edited)?,
+        _ => check_length(baseline_markdown, &edited)?,
+    }
+
+    let final_doc = rules.clean_doc(&candidate_doc(doc, edited)).doc;
+    if mode == Mode::Simplify {
+        validate_structure(doc, baseline_markdown, &final_doc)?;
+    }
     Ok(final_doc)
 }
 
@@ -399,7 +586,7 @@ fn send(config: &Config, port: Option<u16>, system: &str, text: &str) -> Result<
 }
 
 /// Ways a small model answers the instructions instead of following them.
-const COMMENTARY: [&str; 18] = [
+const COMMENTARY: [&str; 24] = [
     "do not use",
     "don't use",
     "never use",
@@ -418,6 +605,12 @@ const COMMENTARY: [&str; 18] = [
     "no commentary",
     "as an ai",
     "i cannot rewrite",
+    "here is a summary",
+    "here's a summary",
+    "here is the summary",
+    "here's the summary",
+    "simplified text",
+    "simplified version",
 ];
 
 /// Whether the rewrite is talking about the task rather than doing it.
@@ -444,6 +637,21 @@ pub fn check_length(before: &str, after: &str) -> Result<(), Rejected> {
     }
     if after > before * 3 {
         return Err(Rejected::Structure("the rewrite ran away"));
+    }
+    Ok(())
+}
+
+/// The one length rule a summary has to meet: it exists, and it is shorter.
+///
+/// No lower bound. A long, padded text can honestly come down to a sentence,
+/// and a summary that is too short is visible on screen in a way a mangled
+/// fact is not.
+pub fn check_shorter(before: &str, after: &str) -> Result<(), Rejected> {
+    if after.trim().is_empty() {
+        return Err(Rejected::Structure("the summary came back empty"));
+    }
+    if after.chars().count() >= before.chars().count() {
+        return Err(Rejected::Structure("the summary is no shorter than the text"));
     }
     Ok(())
 }

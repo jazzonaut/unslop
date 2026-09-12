@@ -15,7 +15,7 @@ use std::{
 };
 
 use unslop::{
-    config::Config,
+    config::{Config, Mode},
     doc::Doc,
     model::{self, Model},
     rewrite,
@@ -69,7 +69,7 @@ fn main() {
                 let doc = Doc::Plain(text.to_owned());
 
                 let started = Instant::now();
-                let outcome = rewrite::run(&rules, &doc, &config, Some(port));
+                let outcome = rewrite::run(&rules, &doc, &config, Some(port), Mode::Unslop);
                 let ms = started.elapsed().as_millis();
 
                 // The rules-only result is what stands whenever the model pass

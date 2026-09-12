@@ -139,6 +139,16 @@
   button.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
   button.primary:hover { filter: brightness(1.08); background: var(--brand); }
   #install:not([hidden]) { border-color: var(--brand); color: var(--brand); }
+  /* Dressed as a button, since it sits in the same row. */
+  #mode {
+    font: inherit; font-weight: 550; font-size: 13px;
+    padding: 6px 28px 6px 12px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--chrome); color: var(--ink);
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  #mode:hover { background-color: var(--hover); }
 </style>
 </head>
 <body class="done">
@@ -172,6 +182,11 @@
       <span id="detail-text"></span>
     </div>
     <div class="spacer"></div>
+    <select id="mode" title="What the model pass does" onchange="send('mode:' + this.value)">
+      <option value="unslop">Unslop</option>
+      <option value="simplify">Simplify</option>
+      <option value="tldr">tl;dr</option>
+    </select>
     <button id="install" hidden onclick="send('install')"></button>
     <button id="toggle" hidden onclick="send('toggle')"></button>
     <button id="diff" onclick="setDiff(!showingDiff)">Diff</button>
@@ -219,6 +234,9 @@
       button.textContent = label || '';
       note = text || '';
       paintDetail();
+    }
+    function setMode(mode) {
+      el('mode').value = mode;
     }
     // Labelled by Rust with wherever the button now goes, since the preview
     // switches between the two versions in both directions.

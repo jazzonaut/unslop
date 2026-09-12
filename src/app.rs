@@ -16,7 +16,7 @@ use tao::event_loop::EventLoopProxy;
 
 use crate::{
     Message, clip,
-    config::{Config, Provider},
+    config::{Config, Mode, Provider},
     doc::Doc,
     download::Progress,
     install::Installer,
@@ -29,9 +29,43 @@ use crate::{
 /// Long enough to cover loading 8B of weights from a cold start.
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// The two sides of the version toggle, named after where each one goes.
+/// The deterministic side of the version toggle, named after where it goes.
+/// The model's side is named per mode, see `Wording`.
 const RULES_LABEL: &str = "Rules only";
-const MODEL_LABEL: &str = "Model rewrite";
+
+/// What the popup calls things in each mode.
+struct Wording {
+    /// The status pill while the model runs, and once it has finished.
+    working: &'static str,
+    done: &'static str,
+    /// The model's version, as the toggle offers it and the footer credits it.
+    model: &'static str,
+    /// The status pill when the mode needs a model and there is none.
+    no_model: &'static str,
+}
+
+fn wording(mode: Mode) -> Wording {
+    match mode {
+        Mode::Unslop => Wording {
+            working: "Unslopping\u{2026}",
+            done: "Unslopped",
+            model: "Model rewrite",
+            no_model: "Unslopped",
+        },
+        Mode::Simplify => Wording {
+            working: "Simplifying\u{2026}",
+            done: "Simplified",
+            model: "Simplified",
+            no_model: "No model to simplify with, rules only",
+        },
+        Mode::Tldr => Wording {
+            working: "Summarising\u{2026}",
+            done: "Summarised",
+            model: "Summary",
+            no_model: "No model to summarise with, rules only",
+        },
+    }
+}
 
 /// What the popup says when the hotkey lands on nothing. An image or a file
 /// copied from Explorer offers no text either, so this covers more than a
@@ -51,6 +85,8 @@ pub struct App {
     /// deterministic pass is the whole product and still works.
     model: Option<Model>,
     installer: Installer,
+    /// What the dropdown says the model pass should do.
+    mode: Mode,
     /// Rises with every hotkey press, so a slow rewrite belonging to an older
     /// press can be recognised and discarded.
     active_job: u64,
@@ -78,6 +114,7 @@ impl App {
     pub fn new(config: Config, rules: Rules, installer: Installer) -> Self {
         let model = build_model(&config, installer.path());
         Self {
+            mode: config.mode,
             config: Arc::new(config),
             rules: Arc::new(rules),
             model,
@@ -128,26 +165,48 @@ impl App {
 
         let cleaned = self.rules.clean_doc(&doc);
         self.original = doc.text().to_owned();
-        self.baseline = Some(cleaned.doc.clone());
-        self.shown = Some(cleaned.doc.clone());
+        self.baseline = Some(cleaned.doc);
+        self.fixes = cleaned.fixes;
+        self.begin(popup, proxy);
+    }
+
+    /// Show the baseline and start the model pass on it in the current mode.
+    /// Also where a mode change lands, so the same text is redone in place.
+    fn begin(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>) {
+        let Some(baseline) = self.baseline.clone() else {
+            return;
+        };
+        self.shown = Some(baseline.clone());
         self.rewritten = None;
         self.showing_baseline = true;
-        self.fixes = cleaned.fixes;
         self.active_job += 1;
 
         // The rules pass is instant, so without saying that a second pass is
-        // running the window looks finished the moment it appears.
-        let rewriting = self.start_rewrite(cleaned.doc.clone(), proxy);
-        let phase = if rewriting {
-            (Phase::Working, "Unslopping\u{2026}")
-        } else {
-            (Phase::Done, "Unslopped")
+        // running the window looks finished the moment it appears. Unslop is
+        // whole without a model; the other two are not, and say so.
+        let rewriting = self.start_rewrite(baseline.clone(), proxy);
+        let words = wording(self.mode);
+        let phase = match (rewriting, self.mode) {
+            (true, _) => (Phase::Working, words.working),
+            (false, Mode::Unslop) => (Phase::Done, words.done),
+            (false, _) => (Phase::Warn, words.no_model),
         };
 
-        popup.show(&cleaned.doc, &self.original, &self.detail("rules"));
+        popup.show(&baseline, &self.original, &self.detail("rules"));
         popup.set_phase(phase.0, phase.1);
         popup.set_toggle(None);
+        popup.set_mode(self.mode);
         popup.set_install(self.install_button(), self.note());
+    }
+
+    /// The dropdown changed: remember it, and redo whatever is on show.
+    pub fn on_set_mode(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>, mode: Mode) {
+        if mode == self.mode {
+            return;
+        }
+        self.mode = mode;
+        Config::remember_mode(mode);
+        self.begin(popup, proxy);
     }
 
     /// Notice a Ctrl+C that happened while the popup was open, and act on it.
@@ -212,8 +271,9 @@ impl App {
         }
         match result {
             Ok(doc) => {
-                popup.update(&doc, &self.original, &self.detail("model rewrite"));
-                popup.set_phase(Phase::Done, "Unslopped");
+                let words = wording(self.mode);
+                popup.update(&doc, &self.original, &self.detail(&words.model.to_lowercase()));
+                popup.set_phase(Phase::Done, words.done);
                 popup.set_toggle(Some(RULES_LABEL));
                 self.showing_baseline = false;
                 self.rewritten = Some(doc.clone());
@@ -235,16 +295,17 @@ impl App {
     /// Both are kept, so changing your mind about which one was better costs
     /// nothing and works in either direction.
     pub fn on_toggle_version(&mut self, popup: &Popup) {
+        let model = wording(self.mode).model;
         let (other, source, label) = if self.showing_baseline {
-            (&self.rewritten, "model rewrite", RULES_LABEL)
+            (&self.rewritten, model.to_lowercase(), RULES_LABEL)
         } else {
-            (&self.baseline, "rules", MODEL_LABEL)
+            (&self.baseline, "rules".to_owned(), model)
         };
         let Some(doc) = other.clone() else {
             return;
         };
         self.showing_baseline = !self.showing_baseline;
-        popup.update(&doc, &self.original, &self.detail(source));
+        popup.update(&doc, &self.original, &self.detail(&source));
         popup.set_toggle(Some(label));
         self.shown = Some(doc);
     }
@@ -334,11 +395,12 @@ impl App {
 
         let rules = Arc::clone(&self.rules);
         let config = Arc::clone(&self.config);
-        let (job, proxy) = (self.active_job, proxy.clone());
+        let (job, mode, proxy) = (self.active_job, self.mode, proxy.clone());
         thread::spawn(move || {
             let ready = port.is_none_or(|port| model::wait_until_ready(port, READY_TIMEOUT));
             let result = if ready {
-                rewrite::run(&rules, &doc, &config, port).map_err(|rejected| rejected.to_string())
+                rewrite::run(&rules, &doc, &config, port, mode)
+                    .map_err(|rejected| rejected.to_string())
             } else {
                 Err("the model server did not start".to_owned())
             };

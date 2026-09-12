@@ -1,7 +1,7 @@
 //! The configuration file is the user's interface to everything the tool does,
 //! so a partial or outdated one has to keep working.
 
-use unslop::config::{Config, Provider, with_launch_at_startup};
+use unslop::config::{Config, Mode, Provider, with_launch_at_startup, with_setting};
 
 #[test]
 fn the_bundled_default_is_complete_and_valid() {
@@ -15,6 +15,30 @@ fn the_bundled_default_is_complete_and_valid() {
     // Nothing should start itself or replace its own icon without being asked.
     assert!(!config.launch_at_startup);
     assert!(config.icon.is_empty());
+    assert_eq!(config.mode, Mode::Unslop);
+}
+
+#[test]
+fn the_dropdown_is_remembered_the_same_way_as_the_tray_toggle() {
+    // One line, in place, comments intact, and a file from before the
+    // dropdown existed gains the key above the first section.
+    let file = include_str!("../defaults/config.toml");
+    let saved = with_setting(file, "mode", "\"tldr\"");
+    assert_eq!(Config::from_str_for_test(&saved).unwrap().mode, Mode::Tldr);
+    assert_eq!(
+        saved.lines().filter(|l| l.trim_start().starts_with('#')).count(),
+        file.lines().filter(|l| l.trim_start().starts_with('#')).count(),
+    );
+
+    let old = "hotkey = \"CTRL+ALT+KeyU\"\n\n[local]\nidle_unload_mins = 2\n";
+    let config = Config::from_str_for_test(&with_setting(old, "mode", "\"simplify\"")).unwrap();
+    assert_eq!(config.mode, Mode::Simplify);
+    assert_eq!(config.local.idle_unload_mins, 2);
+
+    // A key that merely starts with the name is someone else's line.
+    let other = "model_x = 1\n";
+    assert!(with_setting(other, "mode", "\"tldr\"").contains("model_x = 1"));
+    assert!(with_setting(other, "mode", "\"tldr\"").contains("mode = \"tldr\""));
 }
 
 #[test]

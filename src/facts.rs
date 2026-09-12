@@ -105,6 +105,17 @@ impl Protected {
 
     /// Put the original values back, or say why the rewrite cannot be trusted.
     pub fn restore(&self, rewritten: &str) -> Result<String, Violation> {
+        self.restore_with(rewritten, false)
+    }
+
+    /// As `restore`, for a summary: a value may be left out, since condensing
+    /// the text is the job, but one that is kept must be the original bytes and
+    /// none may be repeated or invented.
+    pub fn restore_subset(&self, rewritten: &str) -> Result<String, Violation> {
+        self.restore_with(rewritten, true)
+    }
+
+    fn restore_with(&self, rewritten: &str, may_drop: bool) -> Result<String, Violation> {
         static TOKEN: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[\[F(\d+)\]\]").expect("a fixed pattern"));
 
@@ -125,7 +136,9 @@ impl Protected {
         {
             return Err(Violation::Duplicated(index));
         }
-        if let Some(index) = (0..self.values.len()).find(|i| !seen.contains_key(i)) {
+        if !may_drop
+            && let Some(index) = (0..self.values.len()).find(|i| !seen.contains_key(i))
+        {
             return Err(Violation::Missing(index));
         }
 

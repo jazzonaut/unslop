@@ -33,6 +33,20 @@ launch_at_startup = false
 icon = ""
 
 
+# What the model pass does. The dropdown in the popup changes this and saves
+# the choice back here, so the tool opens the way it was left.
+#
+#   "unslop"    strip the AI tells, keep everything else.
+#   "simplify"  plain language, shorter sentences, repetition cut. Every point
+#               and every protected value is kept.
+#   "tldr"      condense to about a quarter of the length, as plain prose.
+#               Details may be dropped but never altered.
+#
+# The rules pass runs first in every mode. Without a model, simplify and tldr
+# fall back to that result and the popup says so.
+mode = "unslop"
+
+
 [rewrite]
 # Where the rewrite happens.
 #

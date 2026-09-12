@@ -29,6 +29,8 @@ pub enum Message {
     Hotkey,
     /// Switch the preview between the deterministic result and the model's.
     ToggleVersion,
+    /// The dropdown changed. Re-runs the model pass on what is on show.
+    SetMode(config::Mode),
     /// Put the result currently on show back on the clipboard, for when
     /// something else has since overwritten it.
     Copy,

@@ -2,7 +2,7 @@
 //! way. It is never allowed to make things worse.
 
 use unslop::{
-    config::Config,
+    config::{Config, Mode},
     doc::Doc,
     rewrite,
     rules::{Finding, Rules},
@@ -79,7 +79,7 @@ fn text_too_long_for_the_context_window_is_refused() {
     let long = Doc::Plain("word ".repeat(4000));
     // No port at all proves it never reached the network.
     assert_eq!(
-        rewrite::run(&rules(), &long, &Config::default(), None),
+        rewrite::run(&rules(), &long, &Config::default(), None, Mode::Unslop),
         Err(rewrite::Rejected::TooLong)
     );
 }
@@ -89,7 +89,7 @@ fn an_unreachable_model_leaves_the_baseline_alone() {
     let doc = Doc::Plain("In order to ship we cut scope.".into());
     // Nothing is listening on this port.
     assert!(matches!(
-        rewrite::run(&rules(), &doc, &Config::default(), Some(9)),
+        rewrite::run(&rules(), &doc, &Config::default(), Some(9), Mode::Unslop),
         Err(rewrite::Rejected::Model(_))
     ));
 }
@@ -108,6 +108,7 @@ fn a_real_rewrite_removes_the_tells_and_keeps_the_facts() {
         &Doc::Plain(slop.into()),
         &Config::default(),
         Some(PORT),
+        Mode::Unslop,
     ) {
         Ok(doc) => doc.text().to_owned(),
         Err(err) => panic!("rewrite rejected: {err}"),
@@ -169,7 +170,7 @@ fn rich_text_keeps_its_table_through_a_rewrite() {
         text: "In order to ship, the costs below are final. Item Cost Build \u{a3}4,500".into(),
     };
 
-    match rewrite::run(&rules(), &doc, &Config::default(), Some(PORT)) {
+    match rewrite::run(&rules(), &doc, &Config::default(), Some(PORT), Mode::Unslop) {
         Ok(out @ Doc::Rich { .. }) => {
             let Doc::Rich { html, .. } = &out else {
                 unreachable!()
@@ -343,6 +344,123 @@ fn an_empty_or_runaway_answer_is_not_a_rewrite() {
 }
 
 #[test]
+fn a_summary_is_told_how_long_and_that_it_may_drop_facts() {
+    // "About a quarter" is a guess to a 4B; a word count is a target. And the
+    // placeholder rule has to change with the job, or the model is told to
+    // keep every fact in a text it was told to cut to a quarter.
+    let text = "word ".repeat(400);
+    let prompt = rewrite::condense_prompt(Mode::Tldr, &text, 2);
+    assert!(prompt.contains("about 100 words"), "{prompt}");
+    assert!(prompt.contains("leave out the rest"), "{prompt}");
+    assert!(prompt.contains("em dash"), "the hard bans went missing");
+
+    // Very short text is not asked to shrink below what it can say.
+    let short = rewrite::condense_prompt(Mode::Tldr, "Ship it on Monday.", 0);
+    assert!(short.contains("about 4 words"), "{short}");
+    assert!(!short.contains("[[F"), "no protected values, no placeholder rule");
+
+    // Simplify keeps every point, so it keeps the strict rule.
+    let simplify = rewrite::condense_prompt(Mode::Simplify, &text, 1);
+    assert!(simplify.contains("Never drop"), "{simplify}");
+    assert!(simplify.contains("Keep lists, tables"), "{simplify}");
+}
+
+#[test]
+fn simplify_is_told_how_many_bullet_points_to_return() {
+    // "Keep lists" is the kind of abstract instruction this model ignores:
+    // measured on two bulleted texts it flattened the list into prose in 10 of
+    // 10 runs and every one was refused, where naming the count kept it in 10
+    // of 10. The count must match what `validate_structure` counts, or the
+    // prompt asks for something the guard will reject.
+    let list = "Key takeaways:
+
+- Growth: revenue rose.
+- Retention: churn fell.
+
+The board meets soon.";
+    let prompt = rewrite::condense_prompt(Mode::Simplify, list, 0);
+    assert!(prompt.contains("contains 2 bullet points"), "{prompt}");
+    assert!(prompt.contains("the same 2 bullet points"), "{prompt}");
+
+    // The prose around a list must not be swept into it. An earlier wording
+    // said only "return exactly N bullet points" and the model turned the
+    // lead-in and the closing paragraph into bullets too.
+    assert!(prompt.contains("never turn a heading"), "{prompt}");
+
+    // Text with no list is left exactly as it was, so the ordinary Simplify
+    // prompt is unchanged for everything that has no list to lose.
+    let prose = rewrite::condense_prompt(Mode::Simplify, "Just a sentence.", 0);
+    assert!(!prose.contains("bullet point"), "{prose}");
+}
+
+#[test]
+fn a_paragraph_stays_a_paragraph_but_a_list_is_left_alone() {
+    // Observed on Qwen3.5-4B in Simplify: an email arrives as one paragraph
+    // and comes back with every sentence on its own line.
+    let email = "Three vendors are done. Two are due by Friday. Budget is fine.";
+    let lined = "Three vendors are done.\nTwo are due by Friday.\nBudget is fine.";
+    assert_eq!(rewrite::keep_paragraphs(email, lined), email);
+
+    // Two paragraphs in, two paragraphs out; only the breaks inside go.
+    let two = "First point. More on it.\n\nSecond point.";
+    let lined = "First point.\nMore on it.\n\nSecond point.";
+    assert_eq!(rewrite::keep_paragraphs(two, lined), two);
+
+    // Text that already had single line breaks is the author's business.
+    let poem = "Roses are red\nViolets are blue";
+    assert_eq!(rewrite::keep_paragraphs(poem, poem), poem);
+    let crlf = "Roses are red\r\nViolets are blue";
+    assert_eq!(rewrite::keep_paragraphs(crlf, poem), poem);
+
+    // A list the model built is not flattened into "- a - b".
+    let list = "Points:\n\n- one\n- two";
+    assert_eq!(rewrite::keep_paragraphs(email, list), list);
+    let numbered = "1. one\n2. two";
+    assert_eq!(rewrite::keep_paragraphs(email, numbered), numbered);
+}
+
+#[test]
+fn a_summary_only_has_to_be_shorter() {
+    // check_length would reject a summary for dropping most of the text,
+    // which is the job. The one thing a summary may not be is longer.
+    let text = "This is a moderately long paragraph that says several things at length.";
+    assert!(rewrite::check_shorter(text, "Several things.").is_ok());
+    assert!(rewrite::check_shorter(text, "").is_err());
+    assert!(rewrite::check_shorter(text, text).is_err());
+    assert!(rewrite::check_shorter(text, &format!("{text} And more.")).is_err());
+}
+
+#[test]
+#[ignore = "needs llama-server running"]
+fn a_real_summary_is_short_and_keeps_the_facts_it_mentions() {
+    let long = "The migration to the new billing system is scheduled for March 12. Before then \
+                every team must export its open invoices, because the old system will be read \
+                only from that date. Finance has confirmed the \u{a3}4,500 licence fee is paid. \
+                Support will run both systems in parallel for two weeks so that customers who \
+                phone in can still be looked up in either. Questions go to billing@example.com. \
+                Teams that miss the export window will have their invoices migrated manually, \
+                which takes about a day per team and delays their first statement.";
+    let out = match rewrite::run(
+        &rules(),
+        &Doc::Plain(long.into()),
+        &Config::default(),
+        Some(PORT),
+        Mode::Tldr,
+    ) {
+        Ok(doc) => doc.text().to_owned(),
+        Err(err) => panic!("summary rejected: {err}"),
+    };
+    println!("\n--- SUMMARY ---\n{out}\n");
+    assert!(out.chars().count() < long.chars().count() / 2, "not much of a summary: {out}");
+    // Whatever it kept, it kept exactly. Restore guarantees this.
+    for fact in ["March 12", "\u{a3}4,500", "billing@example.com"] {
+        if out.contains(&fact[..3]) {
+            assert!(out.contains(fact), "a fact was altered: {out}");
+        }
+    }
+}
+
+#[test]
 fn a_bold_bullet_is_a_finding_but_never_an_edit_target() {
     // The pack's inline-header-list detector fires on `- **Label**:` bullets.
     // The prompt tells the model to keep lists as they are, so listing the
@@ -363,4 +481,49 @@ fn a_bold_bullet_is_a_finding_but_never_an_edit_target() {
     );
     assert_eq!(rewrite::gate_score(&hits), 0);
     assert_eq!(rewrite::repair_score(&hits), 0);
+}
+
+/// Not a test: prints what the two condensing modes make of a technical and a
+/// business text, so the prompts can be judged by eye against the live model.
+#[test]
+#[ignore = "needs llama-server running"]
+fn show_condensed_outputs() {
+    let technical = "The scheduler assigns each job to a worker using a weighted round-robin over \
+        the healthy pool. Health is determined by a heartbeat every 5 seconds; a worker that \
+        misses three consecutive heartbeats is marked unhealthy and its in-flight jobs are \
+        requeued with their original priority. Because requeued jobs keep their priority, a \
+        flapping worker can cause head-of-line blocking for lower-priority work, which is why \
+        the pool now applies exponential backoff (base 2s, cap 60s) before readmitting a \
+        worker that has flapped more than twice in 10 minutes. Note that backoff state is \
+        held in memory on the scheduler, so a scheduler restart resets it; persisting it to \
+        the coordination store is tracked in ticket SCHED-4412 and is planned for Q3.";
+    let business = "Following our conversation last week, I wanted to circle back and provide a \
+        comprehensive update on where things stand with the vendor onboarding initiative. \
+        As you know, we have been working diligently to streamline the process and ensure \
+        alignment across all stakeholders. At this point in time, three of the five vendors \
+        have completed the security questionnaire, and we anticipate the remaining two will \
+        do so by 30 September. The legal team has flagged that the standard MSA will need \
+        amendments for the two EU-based vendors due to data residency requirements, which \
+        may push their go-live to mid-October. Budget remains within the approved envelope \
+        of \u{a3}120,000. Please let me know if you have any questions or concerns.";
+
+    for (name, text) in [("TECHNICAL", technical), ("BUSINESS", business)] {
+        for mode in [Mode::Simplify, Mode::Tldr] {
+            let doc = Doc::Plain(text.to_owned());
+            let start = std::time::Instant::now();
+            let out = rewrite::run(&rules(), &doc, &Config::default(), Some(PORT), mode);
+            println!(
+                "\n--- {name} / {mode:?} ({} words -> {}, {:.1}s) ---",
+                text.split_whitespace().count(),
+                out.as_ref()
+                    .map(|doc| doc.text().split_whitespace().count().to_string())
+                    .unwrap_or_else(|_| "rejected".to_owned()),
+                start.elapsed().as_secs_f32()
+            );
+            match out {
+                Ok(doc) => println!("{}", doc.text()),
+                Err(err) => println!("REJECTED: {err}"),
+            }
+        }
+    }
 }

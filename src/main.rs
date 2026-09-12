@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.on_rewrite(&popup, job, result);
             }
             Event::UserEvent(Message::ToggleVersion) => app.on_toggle_version(&popup),
+            Event::UserEvent(Message::SetMode(mode)) => app.on_set_mode(&popup, &proxy, mode),
             Event::UserEvent(Message::Copy) => app.on_copy(&popup),
             Event::UserEvent(Message::LaunchAtStartup(on)) => startup::set(on),
             Event::UserEvent(Message::InstallModel) => app.install(&popup, proxy.clone()),

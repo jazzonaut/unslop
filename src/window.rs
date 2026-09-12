@@ -27,7 +27,7 @@ use windows::Win32::{
 };
 use wry::{WebView, WebViewBuilder};
 
-use crate::{Message, doc::Doc, icon, render};
+use crate::{Message, config::Mode, doc::Doc, icon, render};
 
 /// What the app is doing, as the page's status pill shows it.
 #[derive(Clone, Copy)]
@@ -77,7 +77,14 @@ impl Popup {
         let webview = WebViewBuilder::new()
             .with_html(include_str!("../ui/popup.html"))
             .with_ipc_handler(move |request| {
-                let message = match request.body().as_str() {
+                let body = request.body().as_str();
+                if let Some(mode) = body.strip_prefix("mode:") {
+                    if let Some(mode) = Mode::parse(mode) {
+                        let _ = proxy.send_event(Message::SetMode(mode));
+                    }
+                    return;
+                }
+                let message = match body {
                     "activate" => Message::Activate,
                     "install" => Message::InstallModel,
                     "toggle" => Message::ToggleVersion,
@@ -161,6 +168,12 @@ impl Popup {
 
     pub fn toggle_maximized(&self) {
         self.window.set_maximized(!self.window.is_maximized());
+    }
+
+    /// Point the dropdown at the mode in force: the one saved in the config
+    /// when the page first comes up.
+    pub fn set_mode(&self, mode: Mode) {
+        self.run(&format!("setMode({})", json(Some(mode.as_str()))));
     }
 
     /// Offer the other version of the text, or nothing when there is only one.

@@ -9,7 +9,7 @@
 use std::{env, fs, time::Instant};
 
 use unslop::{
-    config::Config,
+    config::{Config, Mode},
     doc::Doc,
     rewrite,
     rules::{Finding, Rules},
@@ -26,8 +26,15 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let path = &args[0];
     let port: u16 = args[1].parse().expect("port");
-    let runs: usize = args.get(2).map_or(1, |r| r.parse().expect("runs"));
+    let runs: usize = args.get(2).and_then(|r| r.parse().ok()).unwrap_or(1);
     let verbose = args.iter().any(|a| a == "--verbose");
+    let mode = if args.iter().any(|a| a == "--simplify") {
+        Mode::Simplify
+    } else if args.iter().any(|a| a == "--tldr") {
+        Mode::Tldr
+    } else {
+        Mode::Unslop
+    };
     let rules = Rules::load(include_str!("../rules/slop-rules.json")).expect("pack");
     let config = Config::default();
 
@@ -71,7 +78,13 @@ fn main() {
         }
         for run in 0..runs {
             let started = Instant::now();
-            let outcome = rewrite::run(&rules, &Doc::Plain(baseline.clone()), &config, Some(port));
+            let outcome = rewrite::run(
+                &rules,
+                &Doc::Plain(baseline.clone()),
+                &config,
+                Some(port),
+                mode,
+            );
             let ms = started.elapsed().as_millis();
             total_before += score(&before);
             match outcome {

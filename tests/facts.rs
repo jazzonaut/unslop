@@ -57,6 +57,26 @@ fn a_dropped_fact_rejects_the_rewrite() {
 }
 
 #[test]
+fn a_summary_may_drop_a_fact_but_not_alter_one() {
+    // Condensing means leaving things out, so the missing check is lifted.
+    // Nothing else is: a kept value is still the original bytes, and a
+    // repeated or invented one still fails.
+    let protected = Protected::new("Send \u{a3}4,500 to billing@example.com by March 12.");
+    assert_eq!(
+        protected.restore_subset("Pay [[F00]] by [[F02]].").unwrap(),
+        "Pay \u{a3}4,500 by March 12."
+    );
+    assert!(matches!(
+        protected.restore_subset("Pay [[F00]] and [[F00]]."),
+        Err(Violation::Duplicated(0))
+    ));
+    assert!(matches!(
+        protected.restore_subset("Pay [[F07]]."),
+        Err(Violation::Unknown(_))
+    ));
+}
+
+#[test]
 fn a_repeated_fact_rejects_the_rewrite() {
     let protected = Protected::new("Send \u{a3}4,500 by March 12.");
     let doubled = format!("{} And again by [[F01]].", protected.text);

@@ -22,6 +22,7 @@ pub struct Config {
     pub hotkey: String,
     pub launch_at_startup: bool,
     pub icon: String,
+    pub mode: Mode,
     pub rewrite: Rewrite,
     pub local: Local,
     pub remote: Remote,
@@ -34,6 +35,33 @@ pub enum Provider {
     Local,
     Remote,
     Off,
+}
+
+/// What the model pass is asked to do with the text. The rules pass runs the
+/// same way in every mode; this decides what the model does after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Unslop,
+    Simplify,
+    Tldr,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 3] = [Mode::Unslop, Mode::Simplify, Mode::Tldr];
+
+    /// The spelling used in the config file and by the page's dropdown.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Unslop => "unslop",
+            Mode::Simplify => "simplify",
+            Mode::Tldr => "tldr",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.as_str() == text)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -159,9 +187,18 @@ impl Config {
     /// configuration, so serialising the whole struct back over it would cost
     /// the user every comment and every setting they had left at its default.
     pub fn remember_launch_at_startup(enabled: bool) {
+        Self::remember(|text| with_launch_at_startup(text, enabled));
+    }
+
+    /// Persist the dropdown's choice, so the tool opens the way it was left.
+    pub fn remember_mode(mode: Mode) {
+        Self::remember(|text| with_setting(text, "mode", &format!("{:?}", mode.as_str())));
+    }
+
+    fn remember(edit: impl Fn(&str) -> String) {
         let path = Self::path();
         let text = fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_FILE.to_owned());
-        if let Err(err) = fs::write(&path, with_launch_at_startup(&text, enabled)) {
+        if let Err(err) = fs::write(&path, edit(&text)) {
             eprintln!("could not save the setting to {}: {err}", path.display());
         }
     }
@@ -194,18 +231,23 @@ fn overlay(base: toml::Value, over: toml::Value) -> toml::Value {
     toml::Value::Table(base)
 }
 
-/// Replace the `launch_at_startup` line in `text`, or add it if the file
-/// predates the setting.
+pub fn with_launch_at_startup(text: &str, enabled: bool) -> String {
+    with_setting(text, "launch_at_startup", &enabled.to_string())
+}
+
+/// Replace the top-level `key = ...` line in `text`, or add it if the file
+/// predates the setting. `value` is already TOML.
 ///
 /// A missing key has to go in before the first `[section]` header: after one it
 /// would be read as a key of that table rather than a top-level setting.
-pub fn with_launch_at_startup(text: &str, enabled: bool) -> String {
-    let setting = format!("launch_at_startup = {enabled}");
+pub fn with_setting(text: &str, key: &str, value: &str) -> String {
+    let setting = format!("{key} = {value}");
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    match lines
-        .iter()
-        .position(|line| line.trim_start().starts_with("launch_at_startup"))
-    {
+    let is_key = |line: &String| {
+        let rest = line.trim_start().strip_prefix(key);
+        rest.is_some_and(|rest| rest.trim_start().starts_with('='))
+    };
+    match lines.iter().position(is_key) {
         Some(at) => lines[at] = setting,
         None => {
             let at = lines

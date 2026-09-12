@@ -110,7 +110,7 @@ fn editing_prompt(findings: &[Finding], text: &str, protected: usize) -> String 
          - Sentences with none of the listed words may stay as they are.\n\
          - Keep lists, tables, links and headings as they are.\n\
          {shape}\
-                  {placeholders}\
+         {placeholders}\
          - Return only the rewritten text, no preamble and no commentary."
     )
 }
@@ -149,7 +149,7 @@ fn simplify_prompt(text: &str, protected: usize) -> String {
          - Keep every fact and claim, including qualifiers such as \"about\", \"roughly\" and \"likely\". Add nothing.\n\
          - Keep lists, tables, links and headings; simplify the words inside them.\n\
          {shape}\
-                  - Keep the paragraph breaks of the text. Do not put each sentence on its own line.\n\
+         - Keep the paragraph breaks of the text. Do not put each sentence on its own line.\n\
          {placeholders}\
          - Return only the rewritten text, no preamble and no commentary."
     )
@@ -235,17 +235,28 @@ pub fn keep_paragraphs(baseline: &str, edited: &str) -> String {
 /// prompt said only "keep links". Adding a field to `Shape` stops compiling
 /// until this says what to do with it.
 fn shape_rule(text: &str) -> String {
+    let html = markdown::to_html(text);
     let markdown::Shape {
         tables,
         links,
         list_items,
-    } = markdown::Shape::of_html(&markdown::to_html(text));
+    } = markdown::Shape::of_html(&html);
 
     let mut rules = String::new();
     if list_items > 0 {
+        // The guard counts items and does not care how they are marked, but
+        // the model does exactly what this line says: told "- " it turned a
+        // numbered list into dashes in 6 runs of 6, in both modes. The bullet
+        // wording is the measured one and stays; a numbered list gets the
+        // marker it already has.
+        let marker = if html.contains("<ol") {
+            "numbered or marked exactly as it is now"
+        } else {
+            "starting with \"- \""
+        };
         rules += &format!(
             "- The text contains {list_items} bullet points. Return the same \
-             {list_items} bullet points, each on its own line starting with \"- \". \
+             {list_items} bullet points, each on its own line {marker}. \
              Shorten the words inside a bullet point, but never turn one into a \
              sentence of a paragraph, and never turn a heading, a lead-in line or a \
              paragraph into a bullet point.\n"
@@ -331,7 +342,7 @@ fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
          Do not swap a listed word for a synonym of the same kind. Say the plain thing, or cut it.\n\
          Keep the meaning, the professional register and the Markdown structure.\n\
          {shape}\
-                  Never use an em dash or en dash.\n\
+         Never use an em dash or en dash.\n\
          {placeholders}\
          Return the complete corrected text only."
     )
@@ -381,53 +392,45 @@ fn unslop(
 
     let protected = Protected::new(baseline_markdown);
     let prompt = editing_prompt(&baseline_findings, baseline_markdown, protected.count());
-    let answer = send(config, port, &prompt, &protected.text)?;
 
-    with_second_draw(
-        config,
-        port,
-        &prompt,
-        &protected.text,
-        answer.trim(),
-        |answer| {
-            let mut edited = protected.restore(answer).map_err(Rejected::Facts)?;
-            validate_text_answer(baseline_markdown, &edited)?;
+    with_second_draw(config, port, &prompt, &protected.text, |answer| {
+        let mut edited = protected.restore(answer).map_err(Rejected::Facts)?;
+        validate_text_answer(baseline_markdown, &edited)?;
 
-            // One focused repair attempt, never a loop. A repair is kept only if it
-            // removed something it was asked to remove, so a model that rewords at
-            // random cannot spend the attempt making the text worse. Vocabulary counts
-            // as progress here even though the gate below ignores it: dropping
-            // "delve" is a win, it is only failing to drop it that is forgivable.
-            let surviving = rules.detect(&edited);
-            if let Some(repaired) = try_repair(config, port, &edited, &surviving)
-                && repair_score(&rules.detect(&repaired)) < repair_score(&surviving)
-            {
-                edited = repaired;
-            }
+        // One focused repair attempt, never a loop. A repair is kept only if it
+        // removed something it was asked to remove, so a model that rewords at
+        // random cannot spend the attempt making the text worse. Vocabulary counts
+        // as progress here even though the gate below ignores it: dropping
+        // "delve" is a win, it is only failing to drop it that is forgivable.
+        let surviving = rules.detect(&edited);
+        if let Some(repaired) = try_repair(config, port, &edited, &surviving)
+            && repair_score(&rules.detect(&repaired)) < repair_score(&surviving)
+        {
+            edited = repaired;
+        }
 
-            let candidate = candidate_doc(doc, edited);
+        let candidate = candidate_doc(doc, edited);
 
-            // The deterministic pass runs again over the model's output. It reintroduces
-            // the very tells the first pass removed, em dashes above all, and this is
-            // free and the only way to be sure.
-            let final_doc = rules.clean_doc(&candidate).doc;
+        // The deterministic pass runs again over the model's output. It reintroduces
+        // the very tells the first pass removed, em dashes above all, and this is
+        // free and the only way to be sure.
+        let final_doc = rules.clean_doc(&candidate).doc;
 
-            validate_structure(doc, baseline_markdown, &final_doc)?;
+        validate_structure(doc, baseline_markdown, &final_doc)?;
 
-            let final_markdown = markdown_from_doc(&final_doc)?;
-            check_length(baseline_markdown, &final_markdown)?;
+        let final_markdown = markdown_from_doc(&final_doc)?;
+        check_length(baseline_markdown, &final_markdown)?;
 
-            // A rewrite that left every structural tell standing did not do the job.
-            // Vocabulary is not counted here, only shapes: see `gate_score`.
-            if baseline_score > 0 && gate_score(&rules.detect(&final_markdown)) >= baseline_score {
-                return Err(Rejected::Style(
-                    "the model left the structural tells in place",
-                ));
-            }
+        // A rewrite that left every structural tell standing did not do the job.
+        // Vocabulary is not counted here, only shapes: see `gate_score`.
+        if baseline_score > 0 && gate_score(&rules.detect(&final_markdown)) >= baseline_score {
+            return Err(Rejected::Style(
+                "the model left the structural tells in place",
+            ));
+        }
 
-            Ok(final_doc)
-        },
-    )
+        Ok(final_doc)
+    })
 }
 
 /// Simplify or summarise, with the checks that still make sense for a text
@@ -454,38 +457,30 @@ fn condense(
 ) -> Result<Doc, Rejected> {
     let protected = Protected::new(baseline_markdown);
     let prompt = condense_prompt(mode, baseline_markdown, protected.count());
-    let answer = send(config, port, &prompt, &protected.text)?;
 
-    with_second_draw(
-        config,
-        port,
-        &prompt,
-        &protected.text,
-        answer.trim(),
-        |answer| {
-            let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
-            let edited = keep_paragraphs(baseline_markdown, &edited);
+    with_second_draw(config, port, &prompt, &protected.text, |answer| {
+        let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
+        let edited = keep_paragraphs(baseline_markdown, &edited);
 
-            if is_commentary(baseline_markdown, &edited) {
-                return Err(Rejected::Structure(
-                    "the rewrite talked about the task instead of doing it",
-                ));
-            }
-            match mode {
-                Mode::Tldr => check_shorter(baseline_markdown, &edited)?,
-                _ => check_length(baseline_markdown, &edited)?,
-            }
+        if is_commentary(baseline_markdown, &edited) {
+            return Err(Rejected::Structure(
+                "the rewrite talked about the task instead of doing it",
+            ));
+        }
+        match mode {
+            Mode::Tldr => check_shorter(baseline_markdown, &edited)?,
+            _ => check_length(baseline_markdown, &edited)?,
+        }
 
-            let final_doc = rules.clean_doc(&candidate_doc(doc, edited)).doc;
-            if mode == Mode::Simplify {
-                validate_structure(doc, baseline_markdown, &final_doc)?;
-            }
-            Ok(final_doc)
-        },
-    )
+        let final_doc = rules.clean_doc(&candidate_doc(doc, edited)).doc;
+        if mode == Mode::Simplify {
+            validate_structure(doc, baseline_markdown, &final_doc)?;
+        }
+        Ok(final_doc)
+    })
 }
 
-/// One more attempt for a rewrite the validators refused, and never a loop.
+/// Ask once, and once more if the validators refused the answer. Never a loop.
 ///
 /// Every guard here is a tripwire on the whole result: one dropped link or one
 /// over-cut paragraph and an otherwise good rewrite is thrown away. That is
@@ -514,13 +509,13 @@ fn with_second_draw<F>(
     port: Option<u16>,
     prompt: &str,
     body: &str,
-    answer: &str,
     finish: F,
 ) -> Result<Doc, Rejected>
 where
     F: Fn(&str) -> Result<Doc, Rejected>,
 {
-    let refused = match finish(answer) {
+    let answer = send(config, port, prompt, body)?;
+    let refused = match finish(answer.trim()) {
         Ok(doc) => return Ok(doc),
         Err(refused) => refused,
     };

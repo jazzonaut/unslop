@@ -571,29 +571,55 @@ fn a_headings_invisible_permalink_is_not_a_fact_to_protect() {
 }
 
 #[test]
+fn a_link_with_its_url_dropped_out_is_a_lost_link() {
+    // Simplify may leave a protected value out, and the URL of a link is one.
+    // The model that drops the placeholder from `[text]([[F00]])` hands back
+    // `[text]()`, which renders as an anchor with nowhere to go. Counted as a
+    // link, the guard would publish a dead one; counted as nothing, the guard
+    // refuses and the second draw gets its turn.
+    use unslop::markdown::{Shape, to_html};
+
+    let before = Shape::of_html(&to_html("See the [releases page](https://example.com)."));
+    let after = Shape::of_html(&to_html("See the [releases page]()."));
+    assert_eq!(after.links, 0);
+    assert_eq!(before.lost(after), Some("the links were lost"));
+}
+
+#[test]
 fn every_shape_the_guard_counts_is_named_in_the_prompt() {
     // The bug this rules out: `validate_structure` refused a rewrite for
     // losing the one link on the page while the prompt only said "keep links",
     // which this model reads straight past. A dimension the guard counts and
     // the prompt does not insist on is a rejection the user can do nothing
     // about but press Retry.
+    // The static "keep lists, tables, links" line is in every prompt, so the
+    // assertion has to be on the counted wording or it proves nothing.
     let cases = [
         (
             "- one
 - two
 ",
-            "bullet points",
+            "contains 2 bullet points",
         ),
         (
             "See the [releases page](https://example.com/releases).",
-            "link",
+            "contains 1 link",
         ),
         (
             "| Item | Cost |
 | --- | --- |
 | Build | 10 |
 ",
-            "table",
+            "contains 1 table",
+        ),
+        // A numbered list is counted the same way, and must not be told to
+        // come back as dashes: measured 6 of 6 runs did exactly that when
+        // the rule said "starting with \"- \"" for every list.
+        (
+            "1. first
+2. second
+",
+            "numbered or marked exactly as it is now",
         ),
     ];
     for (text, named) in cases {

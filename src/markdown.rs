@@ -104,9 +104,23 @@ impl Shape {
             tables: count("table"),
             // An invisible anchor is not a link the user would miss, and
             // `from_html` has already taken it out: see `is_invisible_link`.
+            // Nor is one with nowhere to go: `[text]()` is what a link becomes
+            // when the model drops the URL placeholder out of it, and the
+            // condensing modes let a dropped value through. Counted as a link,
+            // it hides the one kind of damage that leaves the text looking right.
             links: document
                 .select("a[href]")
-                .map(|links| links.filter(|link| !is_invisible_link(link)).count())
+                .map(|links| {
+                    links
+                        .filter(|link| !is_invisible_link(link))
+                        .filter(|link| {
+                            link.attributes
+                                .borrow()
+                                .get("href")
+                                .is_some_and(|href| !href.trim().is_empty())
+                        })
+                        .count()
+                })
                 .unwrap_or_default(),
             list_items: count("li"),
         }

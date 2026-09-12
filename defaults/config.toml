@@ -88,9 +88,14 @@ max_output_tokens = 1200
 # than Q4_K_M because the coarser quantisation measurably loses adherence, and
 # 500MB is the cheapest thing here to spend. No facts were lost in 420 rewrites.
 #
-# The one thing the 8B does better: it rewrites a plain-text bullet list where
-# this model flattens it into prose every time. That is caught and refused now,
-# so such a list comes back rules-only rather than wrong.
+# A plain-text bullet list used to come back from this model as prose, and the
+# structure check refused the rewrite, so such a text fell back to rules-only.
+# The prompt now names how many bullet points to return, which held the list in
+# all 32 of 32 runs over four bulleted texts in both modes. The check is still
+# there to refuse a rewrite that loses one anyway.
+#
+# What simplify still drops is a list lead-in such as "Key takeaways from the
+# quarter:". Keeping it cost more lists than it saved, so it was left alone.
 #
 # Not measured: speed. This model is steady at about 2.8s a rewrite, but the
 # 8B's own figure moved between 1.6s and 3.8s purely with ordering on a

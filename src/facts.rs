@@ -23,8 +23,13 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r#"https?://[^\s<>()\[\]"']+"#,
         r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-        // Currency, either side, with optional thousands separators.
-        r"[\p{Sc}]\s?\d[\d,. ]*\d|\b\d[\d,.]*\s?(?:GBP|USD|EUR|p|pence)\b",
+        // Currency, either side, with optional thousands separators and the
+        // magnitude that carries the decimal point. A dropped 'm' turns 1.4
+        // into a figure a thousand times smaller and the digits look intact
+        // afterwards, so the suffix is part of the fact. A single digit
+        // counts as well: the old pattern needed two and left a lone 5
+        // sitting in the text for the model to round.
+        r"[\p{Sc}]\s?\d(?:[\d,. ]*\d)?(?:\s?(?:[mkbMKB]n?|million|billion|thousand))?\b|\b\d[\d,.]*\s?(?:GBP|USD|EUR|p|pence)\b",
         r"\b\d{4}-\d{2}-\d{2}\b",
         r"\b\d{1,2}/\d{1,2}/\d{2,4}\b",
         r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?\b",

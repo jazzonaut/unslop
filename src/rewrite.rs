@@ -51,7 +51,7 @@ impl fmt::Display for Rejected {
 /// It takes the text because the prompt depends on it: the pack's own hits in
 /// this document become the edit targets.
 pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
-    editing_prompt(&rules.detect(text), protected)
+    editing_prompt(&rules.detect(text), text, protected)
 }
 
 /// Instructions assembled from the same pack that drives the rules pass, so a
@@ -74,8 +74,9 @@ pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
 /// No worked example, tempting as one is. Given a before/after pair the
 /// same model lifts a sentence out of the "after" and puts it in the answer,
 /// which is a fact it invented.
-fn editing_prompt(findings: &[Finding], protected: usize) -> String {
+fn editing_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
+    let list = list_rule(text);
     let issues = issue_list(findings, 24);
 
     format!(
@@ -90,6 +91,7 @@ fn editing_prompt(findings: &[Finding], protected: usize) -> String {
          - Cut empty words rather than replacing them. A shorter sentence is fine.\n\
          - Sentences with none of the listed words may stay as they are.\n\
          - Keep lists, tables, links and headings as they are.\n\
+         {list}\
          {placeholders}\
          - Return only the rewritten text, no preamble and no commentary."
     )
@@ -203,12 +205,20 @@ pub fn keep_paragraphs(baseline: &str, edited: &str) -> String {
 }
 
 /// Name the bullet count, because "keep lists" does not survive contact with a
-/// 4B. Simplify asks for short sentences and one idea per sentence, and the
-/// model obeys that by turning every bullet into a sentence: measured on two
-/// bulleted texts it flattened the list in 10 of 10 runs, where the unslop
-/// prompt, which says "as they are", never does. The count is counted the way
-/// `validate_structure` counts it, so the prompt asks for exactly what the
-/// guard enforces.
+/// 4B. Both prompts said it and both lost lists: measured over four bulleted
+/// texts, Simplify was refused in every run and unslop in every run of the one
+/// with plain unstyled dashes. Simplify is the worse of the two because it also
+/// asks for short sentences and one idea per sentence, which the model obeys by
+/// turning each bullet into a sentence. Naming the count takes both to 0
+/// rejections in 32 runs. The count is counted the way `validate_structure`
+/// counts it, so the prompt asks for exactly what the guard enforces.
+///
+/// Nothing more may go in this rule. A list lead-in such as "Key takeaways from
+/// the quarter:" is dropped by Simplify in every run, and it is not worth what
+/// fixing it costs: adding a second rule to keep it took plain dashes back to 4
+/// rejections in 4, and folding the same thing in as one extra clause was worse
+/// again, 10 rejections across 16 runs. More instruction, less obedience, the
+/// same way the checklist found it.
 fn list_rule(text: &str) -> String {
     match markdown::Shape::of_html(&markdown::to_html(text)).list_items {
         0 => String::new(),
@@ -265,8 +275,9 @@ fn issue_list(findings: &[Finding], limit: usize) -> String {
 
 /// A deliberately tiny second-pass prompt, used only when strong hits survived
 /// the first edit. It names exactly what was missed and nothing else.
-fn repair_prompt(findings: &[Finding], protected: usize) -> String {
+fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
     let placeholders = placeholder_rule(protected, false);
+    let list = list_rule(text);
     let targets: String = findings
         .iter()
         .take(16)
@@ -279,6 +290,7 @@ fn repair_prompt(findings: &[Finding], protected: usize) -> String {
          {targets}\
          Do not swap a listed word for a synonym of the same kind. Say the plain thing, or cut it.\n\
          Keep the meaning, the professional register and the Markdown structure.\n\
+         {list}\
          Never use an em dash or en dash.\n\
          {placeholders}\
          Return the complete corrected text only."
@@ -331,7 +343,7 @@ fn unslop(
     let answer = send(
         config,
         port,
-        &editing_prompt(&baseline_findings, protected.count()),
+        &editing_prompt(&baseline_findings, baseline_markdown, protected.count()),
         &protected.text,
     )?;
 
@@ -437,7 +449,7 @@ fn try_repair(
     let answer = send(
         config,
         port,
-        &repair_prompt(&findings, protected.count()),
+        &repair_prompt(&findings, current, protected.count()),
         &protected.text,
     )
     .ok()?;

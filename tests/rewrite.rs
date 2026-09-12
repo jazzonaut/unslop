@@ -366,7 +366,7 @@ fn a_summary_is_told_how_long_and_that_it_may_drop_facts() {
 }
 
 #[test]
-fn simplify_is_told_how_many_bullet_points_to_return() {
+fn both_prompts_are_told_how_many_bullet_points_to_return() {
     // "Keep lists" is the kind of abstract instruction this model ignores:
     // measured on two bulleted texts it flattened the list into prose in 10 of
     // 10 runs and every one was refused, where naming the count kept it in 10
@@ -387,10 +387,17 @@ The board meets soon.";
     // lead-in and the closing paragraph into bullets too.
     assert!(prompt.contains("never turn a heading"), "{prompt}");
 
-    // Text with no list is left exactly as it was, so the ordinary Simplify
-    // prompt is unchanged for everything that has no list to lose.
+    // Unslop lost the same lists for the same reason, so it carries the same
+    // rule. Said only once, in one prompt, the other keeps the bug.
+    let unslop = rewrite::system_prompt(&rules(), list, 0);
+    assert!(unslop.contains("contains 2 bullet points"), "{unslop}");
+
+    // Text with no list is left exactly as it was, so the ordinary prompts are
+    // unchanged for everything that has no list to lose.
     let prose = rewrite::condense_prompt(Mode::Simplify, "Just a sentence.", 0);
     assert!(!prose.contains("bullet point"), "{prose}");
+    let plain = rewrite::system_prompt(&rules(), "Just a sentence.", 0);
+    assert!(!plain.contains("bullet point"), "{plain}");
 }
 
 #[test]

@@ -146,3 +146,35 @@ fn times_are_protected() {
         "Call at 3:30pm, again at 09:15."
     );
 }
+
+#[test]
+fn a_money_amount_keeps_its_magnitude_and_may_be_a_single_digit() {
+    // The digits surviving is not enough. Dropped from \u{a3}1.4m, the 'm' takes
+    // three orders of magnitude with it and leaves a figure that still reads
+    // as correct, which is the one failure this whole module exists to stop.
+    // The old pattern also needed two digits, so a lone \u{a3}5 was never
+    // protected at all.
+    for (text, expected) in [
+        ("\u{a3}1.4m", "\u{a3}1.4m"),
+        ("\u{a3}5", "\u{a3}5"),
+        ("\u{a3}2bn", "\u{a3}2bn"),
+        ("\u{a3}9 million", "\u{a3}9 million"),
+        ("\u{a3}4,500", "\u{a3}4,500"),
+        ("$7k", "$7k"),
+    ] {
+        let protected = Protected::new(text);
+        assert_eq!(protected.text, "[[F00]]", "not protected: {text}");
+        assert_eq!(protected.restore("[[F00]]").unwrap(), expected);
+    }
+
+    // A word that merely starts with a magnitude letter is not part of the
+    // amount, or the rewrite loses a word it was entitled to edit.
+    for text in ["\u{a3}5 monthly", "\u{a3}5 bits", "\u{a3}5 km"] {
+        let protected = Protected::new(text);
+        assert_eq!(
+            protected.text,
+            text.replace("\u{a3}5", "[[F00]]"),
+            "swallowed the word after: {text}"
+        );
+    }
+}

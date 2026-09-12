@@ -184,6 +184,16 @@ impl App {
         self.begin(popup, proxy);
     }
 
+    /// Run the model pass again on the same baseline.
+    ///
+    /// Sampling is not deterministic, so a rewrite rejected for mangling a
+    /// fact or leaving the tells in place is often fine on the next draw.
+    /// Nothing is retried automatically: a second pass costs seconds of GPU
+    /// time, and whether this one is worth it is the user's call.
+    pub fn on_retry(&mut self, popup: &Popup, proxy: &EventLoopProxy<Message>) {
+        self.begin(popup, proxy);
+    }
+
     /// Notice a Ctrl+C that happened while the popup was open, and act on it.
     ///
     /// Polling rather than a clipboard listener keeps this out of the window

@@ -15,7 +15,60 @@ fn options() -> Options {
 }
 
 pub fn from_html(html: &str) -> Option<String> {
-    htmd::convert(&promote_table_headers(html)).ok()
+    htmd::convert(&drop_invisible_links(&promote_table_headers(html))).ok()
+}
+
+/// An anchor with nothing to click on: no text and no image.
+///
+/// GitHub puts one of these beside every heading as a permalink, and Word
+/// leaves them behind as bookmarks. They render as nothing at all, but they
+/// carry a URL, which `facts` protects and then requires the model to copy
+/// through untouched. The model drops the invisible token, as anyone would,
+/// and a perfectly good rewrite is rejected for it.
+fn is_invisible_link(link: &kuchikiki::NodeDataRef<kuchikiki::ElementData>) -> bool {
+    link.text_contents().trim().is_empty() && link.as_node().select_first("img").is_err()
+}
+
+/// Take those anchors out before anything measures or converts the markup, so
+/// the shape check and the model see the same document.
+fn drop_invisible_links(html: &str) -> String {
+    use kuchikiki::traits::*;
+
+    let document = kuchikiki::parse_html().one(html);
+    let Ok(links) = document.select("a[href]") else {
+        return html.to_owned();
+    };
+    for link in links.collect::<Vec<_>>() {
+        if is_invisible_link(&link) {
+            link.as_node().detach();
+        }
+    }
+    serialise(&document, html)
+}
+
+/// Put an edited document back together as a fragment, keeping whatever the
+/// parser put in either section and falling back to the input when that comes
+/// to nothing.
+fn serialise(document: &kuchikiki::NodeRef, fallback: &str) -> String {
+    let section = |name| {
+        document
+            .select_first(name)
+            .ok()
+            .map(|found| {
+                found
+                    .as_node()
+                    .children()
+                    .map(|child| child.to_string())
+                    .collect::<String>()
+            })
+            .unwrap_or_default()
+    };
+    let out = section("head") + &section("body");
+    if out.is_empty() {
+        fallback.to_owned()
+    } else {
+        out
+    }
 }
 
 pub fn to_html(markdown: &str) -> String {
@@ -49,7 +102,12 @@ impl Shape {
         };
         Shape {
             tables: count("table"),
-            links: count("a[href]"),
+            // An invisible anchor is not a link the user would miss, and
+            // `from_html` has already taken it out: see `is_invisible_link`.
+            links: document
+                .select("a[href]")
+                .map(|links| links.filter(|link| !is_invisible_link(link)).count())
+                .unwrap_or_default(),
             list_items: count("li"),
         }
     }
@@ -119,19 +177,5 @@ pub fn promote_table_headers(html: &str) -> String {
         }
     }
 
-    let section = |name| {
-        document
-            .select_first(name)
-            .ok()
-            .map(|found| {
-                found
-                    .as_node()
-                    .children()
-                    .map(|child| child.to_string())
-                    .collect::<String>()
-            })
-            .unwrap_or_default()
-    };
-    let out = section("head") + &section("body");
-    if out.is_empty() { html.to_owned() } else { out }
+    serialise(&document, html)
 }

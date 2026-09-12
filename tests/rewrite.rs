@@ -534,3 +534,27 @@ fn show_condensed_outputs() {
         }
     }
 }
+
+#[test]
+fn a_headings_invisible_permalink_is_not_a_fact_to_protect() {
+    // Copying a rendered README out of GitHub brings one of these along beside
+    // every heading. It shows nothing, but it used to reach `facts` as a URL,
+    // and the model was then asked to copy a token it had every reason to drop
+    // after rewriting the heading. Every simplify of a GitHub page failed with
+    // "protected value 0 was dropped".
+    use unslop::{facts::Protected, markdown::{Shape, from_html}};
+
+    let html = "<h1>Unslop</h1>                <a id=\"user-content-unslop\" class=\"anchor\"                 href=\"https://github.com/jazzonaut/unslop#unslop\"></a>                <p>Copy some text, press a hotkey.</p>";
+    let markdown = from_html(html).expect("markdown");
+    assert!(!markdown.contains("github.com"), "got {markdown:?}");
+    assert_eq!(Protected::new(&markdown).count(), 0);
+
+    // And the shape check must agree, or the rewrite is rejected for losing
+    // links that were never visible in the first place.
+    assert_eq!(Shape::of_html(html).links, 0);
+
+    // A link with something to click on is still a link, in both.
+    let real = "<p>see <a href=\"https://example.com\">the docs</a></p>";
+    assert_eq!(Shape::of_html(real).links, 1);
+    assert_eq!(Protected::new(&from_html(real).unwrap()).count(), 1);
+}

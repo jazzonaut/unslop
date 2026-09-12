@@ -87,6 +87,7 @@ impl Popup {
                 let message = match body {
                     "activate" => Message::Activate,
                     "install" => Message::InstallModel,
+                    "retry" => Message::Retry,
                     "copy" => Message::Copy,
                     "drag" => Message::Drag,
                     "maximize" => Message::Maximize,

@@ -29,6 +29,8 @@ pub enum Message {
     Hotkey,
     /// The dropdown changed. Re-runs the model pass on what is on show.
     SetMode(config::Mode),
+    /// Ask the model again, for a rewrite that was rejected or simply poor.
+    Retry,
     /// Put the result currently on show back on the clipboard, for when
     /// something else has since overwritten it.
     Copy,

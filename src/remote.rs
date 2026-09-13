@@ -33,6 +33,9 @@ pub fn rewrite(
 
     let url = format!("{}/chat/completions", remote.base_url.trim_end_matches('/'));
     let mut response = ureq::post(&url)
+        .config()
+        .timeout_global(Some(crate::model::CALL_TIMEOUT))
+        .build()
         .header("Authorization", &format!("Bearer {key}"))
         // OpenRouter attributes requests by these, and they are harmless
         // anywhere else.

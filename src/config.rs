@@ -71,6 +71,7 @@ pub struct Rewrite {
     pub temperature: f32,
     pub max_input_chars: usize,
     pub chunk_chars: usize,
+    pub max_total_chars: usize,
     pub max_output_tokens: u32,
 }
 

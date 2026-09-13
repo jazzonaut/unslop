@@ -83,6 +83,12 @@ max_input_chars = 6000
 # clipboard from the first moment either way.
 chunk_chars = 1500
 
+# The most text the model pass takes on at all. Above this the rules result
+# is all you get, and the popup says so. At about ten seconds a group of
+# chunk_chars, the default is a few minutes of GPU time for one hotkey press;
+# raise it if the card is fast and the documents are long.
+max_total_chars = 30000
+
 # Longest rewrite to accept before giving up on a runaway generation.
 max_output_tokens = 1200
 
@@ -115,6 +121,11 @@ max_output_tokens = 1200
 # Not measured: speed. This model is steady at about 2.8s a rewrite, but the
 # 8B's own figure moved between 1.6s and 3.8s purely with ordering on a
 # thermally throttled laptop 4070, so the two are not yet comparable.
+#
+# Point this at another GGUF and that file is used as it is, whatever its
+# size. Only the default file below is checked against its known size. If the
+# file named here is missing, the Install button downloads the default
+# weights to this path.
 model = "models/qwen3.5-4b-q6_k.gguf"
 
 # How long an idle model server keeps hold of its VRAM.

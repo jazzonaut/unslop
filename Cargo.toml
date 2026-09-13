@@ -20,7 +20,7 @@ tao = "0.37.0"
 toml = "1.1.6"
 tray-icon = "0.24.2"
 ureq = { version = "3.4.1", features = ["json"] }
-windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Console"] }
 windows-registry = "0.100.0"
 wry = "0.57.0"
 

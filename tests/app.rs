@@ -37,8 +37,21 @@ fn a_missing_model_is_the_louder_problem() {
 fn the_privacy_warning_outranks_everything() {
     let mut config = Config::default();
     config.rewrite.provider = Provider::Remote;
+    config.remote.model = "openai/gpt-4o-mini".to_owned();
+    config.remote.api_key = "k".to_owned();
     let note = setup_note(&config, Some("ignored".to_owned()), false).expect("a warning");
     assert!(note.contains(&config.remote.base_url), "got {note:?}");
+}
+
+#[test]
+fn a_remote_provider_with_nothing_to_send_to_says_so() {
+    // Without a model name nothing is sent, and the old note said it was: a
+    // green "Unslopped" over a pass that never ran.
+    let mut config = Config::default();
+    config.rewrite.provider = Provider::Remote;
+    config.remote.model.clear();
+    let note = setup_note(&config, None, false).expect("a warning");
+    assert!(note.contains("rules only"), "got {note:?}");
 }
 
 #[test]

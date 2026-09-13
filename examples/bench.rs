@@ -52,7 +52,7 @@ fn main() {
         let mut engine = Model::new(&exe, weights, Duration::from_secs(3600), &config.local);
         let load = Instant::now();
         let port = engine.port().expect("llama-server did not start");
-        if !model::wait_until_ready(port, Duration::from_secs(300)) {
+        if !model::wait_until_ready(port, Duration::from_secs(300), || true) {
             eprintln!("{name}: never became ready");
             continue;
         }
@@ -69,7 +69,8 @@ fn main() {
                 let doc = Doc::Plain(text.to_owned());
 
                 let started = Instant::now();
-                let outcome = rewrite::run(&rules, &doc, &config, Some(port), Mode::Unslop);
+                let outcome =
+                    rewrite::run(&rules, &doc, &config, Some(port), Mode::Unslop, &|| true);
                 let ms = started.elapsed().as_millis();
 
                 // The rules-only result is what stands whenever the model pass

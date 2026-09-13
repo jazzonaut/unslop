@@ -83,7 +83,9 @@ on AMD and Intel, so both builds are offered.
 
 `config.toml` is written next to the executable on first run, with all of its
 comments intact. Delete it to get the documented defaults back. Edit, save,
-then restart. The settings worth knowing about:
+then restart. Anything the application has to say for itself, a rule pack that
+will not parse or a server that would not start, goes to `unslop.log` in the
+same folder. The settings worth knowing about:
 
 - `hotkey` - a global hotkey is taken system wide, so pick accordingly.
 - `rewrite.provider` - `local`, `remote`, or `off`. `off` is a genuine option
@@ -93,6 +95,8 @@ then restart. The settings worth knowing about:
   clipboard content is cut at blank lines into groups of about this size, each
   rewritten in its own call and joined back up. Small on purpose: the 4B edits
   a short text well and a long one barely at all.
+- `rewrite.max_total_chars` - the most text the model pass takes on at all.
+  Above it the rules result is what you get, and the popup says so.
 - `local.idle_unload_mins` - how long an idle model server keeps its VRAM. 8 GB
   is not enough to hold the weights resident all day, so it is handed back and
   the server restarted on demand.

@@ -54,7 +54,7 @@ impl Rejected {
 impl fmt::Display for Rejected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Rejected::TooLong => write!(f, "a paragraph too long to rewrite, rules only"),
+            Rejected::TooLong => write!(f, "too much text to rewrite, rules only"),
             Rejected::Facts(violation) => write!(f, "rewrite not copied, {violation}"),
             Rejected::Structure(what) => write!(f, "rewrite not copied, {what}"),
             Rejected::Style(what) => write!(f, "rewrite not copied, {what}"),
@@ -69,7 +69,7 @@ impl fmt::Display for Rejected {
 /// It takes the text because the prompt depends on it: the pack's own hits in
 /// this document become the edit targets.
 pub fn system_prompt(rules: &Rules, text: &str, protected: usize) -> String {
-    editing_prompt(&rules.detect(text), text, protected)
+    editing_prompt(&rules.detect(&Protected::new(text).text), text, protected)
 }
 
 /// Instructions assembled from the same pack that drives the rules pass, so a
@@ -362,6 +362,12 @@ fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
 /// the rest of the rewrite: at roughly 85% per call, all-or-nothing over five
 /// groups would refuse more than half of long texts.
 ///
+/// `live` is asked before every model call and says whether anyone still
+/// wants the answer. A hotkey press, a mode change or Retry supersedes the job
+/// in flight and its result is discarded on arrival; without this it would go
+/// on spending the server's one slot on second draws, repairs and the remaining
+/// groups while the job the user is actually waiting on queues behind it.
+///
 /// Blocking: call from a worker thread.
 pub fn run(
     rules: &Rules,
@@ -369,12 +375,19 @@ pub fn run(
     config: &Config,
     port: Option<u16>,
     mode: Mode,
+    live: &dyn Fn() -> bool,
 ) -> Result<Doc, Rejected> {
     let baseline_markdown = markdown_from_doc(doc)?;
     let (target, ceiling) = (config.rewrite.chunk_chars, config.rewrite.max_input_chars);
 
-    if baseline_markdown.chars().count() <= target {
-        return rewrite_one(rules, doc, &baseline_markdown, config, port, mode);
+    // Chunking makes any length possible, not any length sensible: a hundred
+    // groups is a quarter of an hour of GPU for one press of the hotkey.
+    let length = baseline_markdown.chars().count();
+    if length > config.rewrite.max_total_chars {
+        return Err(Rejected::TooLong);
+    }
+    if length <= target {
+        return rewrite_one(rules, doc, &baseline_markdown, config, port, mode, live);
     }
 
     let (mut parts, mut passed, mut refused) = (Vec::new(), 0, None);
@@ -386,6 +399,7 @@ pub fn run(
             config,
             port,
             mode,
+            live,
         ) {
             Ok(edited) => {
                 passed += 1;
@@ -399,15 +413,24 @@ pub fn run(
             }
         }
     }
-    if let (0, Some(refused)) = (passed, refused) {
-        return Err(refused);
+    if passed == 0
+        && let Some(refused) = refused.as_ref()
+    {
+        return Err(refused.clone());
     }
 
     let joined = candidate_doc(doc, parts.join("\n\n"));
     if mode == Mode::Tldr {
         // Summaries of the pieces are a digest, not a summary. Summarise that,
-        // and chunk again should even the digest not fit.
-        return run(rules, &joined, config, port, mode);
+        // and chunk again should even the digest not fit. A digest that has
+        // barely shrunk is mostly refused groups kept as they were, and another
+        // round would only send the same groups again: stop, and say why the
+        // first of them was refused.
+        let shrunk = joined.text().chars().count() * 4 <= length * 3;
+        return match refused {
+            Some(refused) if !shrunk => Err(refused),
+            _ => run(rules, &joined, config, port, mode, live),
+        };
     }
     let final_doc = rules.clean_doc(&joined).doc;
     validate_structure(doc, &baseline_markdown, &final_doc)?;
@@ -422,10 +445,13 @@ fn rewrite_one(
     config: &Config,
     port: Option<u16>,
     mode: Mode,
+    live: &dyn Fn() -> bool,
 ) -> Result<Doc, Rejected> {
     match mode {
-        Mode::Unslop => unslop(rules, doc, baseline_markdown, config, port),
-        Mode::Simplify | Mode::Tldr => condense(rules, doc, baseline_markdown, config, port, mode),
+        Mode::Unslop => unslop(rules, doc, baseline_markdown, config, port, live),
+        Mode::Simplify | Mode::Tldr => {
+            condense(rules, doc, baseline_markdown, config, port, mode, live)
+        }
     }
 }
 
@@ -463,19 +489,27 @@ fn unslop(
     baseline_markdown: &str,
     config: &Config,
     port: Option<u16>,
+    live: &dyn Fn() -> bool,
 ) -> Result<Doc, Rejected> {
-    // Detected against the text the model will actually edit, which is what
-    // makes the checklist worth more than a global word list: the pack's
-    // fix-less phrases, its tier 2 and 3 vocabulary and all twenty of its
-    // regex detectors become exact targets here, and none of them could be
-    // stated usefully in advance.
-    let baseline_findings = rules.detect(baseline_markdown);
-    let baseline_score = gate_score(&baseline_findings);
+    let baseline_score = gate_score(&rules.detect(baseline_markdown));
 
+    // The checklist is detected against the text the model will actually
+    // edit, which is what makes it worth more than a global word list: the
+    // pack's fix-less phrases, its tier 2 and 3 vocabulary and all twenty of
+    // its regex detectors become exact targets here. That text is the
+    // protected one, not the baseline: a detector such as "not just X but"
+    // matches a span, and the span can hold a price or an address, which
+    // quoted in the prompt would leave the machine with a remote provider,
+    // placeholders notwithstanding. The gate above still measures the real
+    // text, as does the check on the result.
     let protected = Protected::new(baseline_markdown);
-    let prompt = editing_prompt(&baseline_findings, baseline_markdown, protected.count());
+    let prompt = editing_prompt(
+        &rules.detect(&protected.text),
+        baseline_markdown,
+        protected.count(),
+    );
 
-    with_second_draw(config, port, &prompt, &protected.text, |answer| {
+    with_second_draw(config, port, &prompt, &protected.text, live, |answer| {
         let mut edited = protected.restore(answer).map_err(Rejected::Facts)?;
         validate_text_answer(baseline_markdown, &edited)?;
 
@@ -485,7 +519,7 @@ fn unslop(
         // as progress here even though the gate below ignores it: dropping
         // "delve" is a win, it is only failing to drop it that is forgivable.
         let surviving = rules.detect(&edited);
-        if let Some(repaired) = try_repair(config, port, &edited, &surviving)
+        if let Some(repaired) = try_repair(rules, config, port, &edited, live)
             && repair_score(&rules.detect(&repaired)) < repair_score(&surviving)
         {
             edited = repaired;
@@ -536,11 +570,12 @@ fn condense(
     config: &Config,
     port: Option<u16>,
     mode: Mode,
+    live: &dyn Fn() -> bool,
 ) -> Result<Doc, Rejected> {
     let protected = Protected::new(baseline_markdown);
     let prompt = condense_prompt(mode, baseline_markdown, protected.count());
 
-    with_second_draw(config, port, &prompt, &protected.text, |answer| {
+    with_second_draw(config, port, &prompt, &protected.text, live, |answer| {
         let edited = protected.restore_subset(answer).map_err(Rejected::Facts)?;
         let edited = keep_paragraphs(baseline_markdown, &edited);
 
@@ -591,12 +626,13 @@ fn with_second_draw<F>(
     port: Option<u16>,
     prompt: &str,
     body: &str,
+    live: &dyn Fn() -> bool,
     finish: F,
 ) -> Result<Doc, Rejected>
 where
     F: Fn(&str) -> Result<Doc, Rejected>,
 {
-    let answer = send(config, port, prompt, body)?;
+    let answer = send(config, port, prompt, body, live)?;
     let refused = match finish(answer.trim()) {
         Ok(doc) => return Ok(doc),
         Err(refused) => refused,
@@ -604,7 +640,7 @@ where
     if !refused.worth_another_draw() {
         return Err(refused);
     }
-    match send(config, port, prompt, body) {
+    match send(config, port, prompt, body, live) {
         Ok(second) => finish(second.trim()).map_err(|_| refused),
         Err(_) => Err(refused),
     }
@@ -615,22 +651,26 @@ where
 /// A failure here does not throw away an otherwise valid first rewrite: the
 /// normal validators still decide whether that rewrite may be returned.
 fn try_repair(
+    rules: &Rules,
     config: &Config,
     port: Option<u16>,
     current: &str,
-    surviving: &[Finding],
+    live: &dyn Fn() -> bool,
 ) -> Option<String> {
-    let findings = repair_targets(surviving);
+    // Detected on the protected text for the same reason as the checklist:
+    // what is quoted back to the model must not carry a value.
+    let protected = Protected::new(current);
+    let findings = repair_targets(&rules.detect(&protected.text));
     if findings.is_empty() {
         return None;
     }
 
-    let protected = Protected::new(current);
     let answer = send(
         config,
         port,
         &repair_prompt(&findings, current, protected.count()),
         &protected.text,
+        live,
     )
     .ok()?;
 
@@ -752,7 +792,19 @@ fn validate_structure(
 }
 
 /// Hand the text to whichever provider is configured.
-fn send(config: &Config, port: Option<u16>, system: &str, text: &str) -> Result<String, Rejected> {
+fn send(
+    config: &Config,
+    port: Option<u16>,
+    system: &str,
+    text: &str,
+    live: &dyn Fn() -> bool,
+) -> Result<String, Rejected> {
+    // Nobody is waiting for this answer, so the call is not made. A `Model`
+    // error stops the chunk loop and the second draw alike, which is exactly
+    // what a superseded job should do.
+    if !live() {
+        return Err(Rejected::Model("superseded by a newer request".to_owned()));
+    }
     let rewrite = &config.rewrite;
     let answer = match rewrite.provider {
         Provider::Off => Err("rewriting is switched off".to_owned()),

@@ -21,6 +21,56 @@ const SLOPPY: &str = "In today's rapidly evolving market we delve into the intri
                       tapestry of controls. The stakes are significant.";
 
 #[test]
+fn protected_values_stay_out_of_the_checklist() {
+    // "not just X but" is a detector, and its match is quoted to the model
+    // verbatim. With a price inside the span that quote carried the price
+    // past the placeholders and, with a remote provider, off the machine.
+    let text = "The offer is not just \u{a3}4,500 but a genuine bargain, so email \
+                bob@example.com by 2024-05-01.";
+    let prompt = rewrite::system_prompt(&rules(), text, 3);
+    assert!(prompt.contains("not just [[F00]] but"), "got {prompt}");
+    assert!(
+        !prompt.contains("4,500") && !prompt.contains("bob@"),
+        "got {prompt}"
+    );
+}
+
+#[test]
+fn a_superseded_job_makes_no_call() {
+    // Nothing listens on port 9, so a call would fail as `Model(_)` with its
+    // own message. The liveness check comes first and nothing is asked at all.
+    let doc = Doc::Plain(SLOPPY.to_owned());
+    match rewrite::run(
+        &rules(),
+        &doc,
+        &Config::default(),
+        Some(9),
+        Mode::Unslop,
+        &|| false,
+    ) {
+        Err(rewrite::Rejected::Model(why)) => assert!(why.contains("superseded"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn too_much_text_altogether_is_left_to_the_rules() {
+    // Every paragraph fits a group, so only the total can refuse this.
+    let long = Doc::Plain("A short paragraph.\n\n".repeat(2_000));
+    assert_eq!(
+        rewrite::run(
+            &rules(),
+            &long,
+            &Config::default(),
+            Some(9),
+            Mode::Unslop,
+            &|| true
+        ),
+        Err(rewrite::Rejected::TooLong)
+    );
+}
+
+#[test]
 fn the_prompt_carries_the_packs_own_tells() {
     // One file drives both passes, so a tell added to the pack reaches the
     // model without anyone editing a prompt string.
@@ -80,7 +130,14 @@ fn text_too_long_for_the_context_window_is_refused() {
     let long = Doc::Plain("word ".repeat(4000));
     // No port at all proves it never reached the network.
     assert_eq!(
-        rewrite::run(&rules(), &long, &Config::default(), None, Mode::Unslop),
+        rewrite::run(
+            &rules(),
+            &long,
+            &Config::default(),
+            None,
+            Mode::Unslop,
+            &|| true
+        ),
         Err(rewrite::Rejected::TooLong)
     );
 }
@@ -90,7 +147,14 @@ fn an_unreachable_model_leaves_the_baseline_alone() {
     let doc = Doc::Plain("In order to ship we cut scope.".into());
     // Nothing is listening on this port.
     assert!(matches!(
-        rewrite::run(&rules(), &doc, &Config::default(), Some(9), Mode::Unslop),
+        rewrite::run(
+            &rules(),
+            &doc,
+            &Config::default(),
+            Some(9),
+            Mode::Unslop,
+            &|| true
+        ),
         Err(rewrite::Rejected::Model(_))
     ));
 }
@@ -110,6 +174,7 @@ fn a_real_rewrite_removes_the_tells_and_keeps_the_facts() {
         &Config::default(),
         Some(PORT),
         Mode::Unslop,
+        &|| true,
     ) {
         Ok(doc) => doc.text().to_owned(),
         Err(err) => panic!("rewrite rejected: {err}"),
@@ -171,7 +236,14 @@ fn rich_text_keeps_its_table_through_a_rewrite() {
         text: "In order to ship, the costs below are final. Item Cost Build \u{a3}4,500".into(),
     };
 
-    match rewrite::run(&rules(), &doc, &Config::default(), Some(PORT), Mode::Unslop) {
+    match rewrite::run(
+        &rules(),
+        &doc,
+        &Config::default(),
+        Some(PORT),
+        Mode::Unslop,
+        &|| true,
+    ) {
         Ok(out @ Doc::Rich { .. }) => {
             let Doc::Rich { html, .. } = &out else {
                 unreachable!()
@@ -458,6 +530,7 @@ fn a_real_summary_is_short_and_keeps_the_facts_it_mentions() {
         &Config::default(),
         Some(PORT),
         Mode::Tldr,
+        &|| true,
     ) {
         Ok(doc) => doc.text().to_owned(),
         Err(err) => panic!("summary rejected: {err}"),
@@ -526,7 +599,14 @@ fn show_condensed_outputs() {
         for mode in [Mode::Simplify, Mode::Tldr] {
             let doc = Doc::Plain(text.to_owned());
             let start = std::time::Instant::now();
-            let out = rewrite::run(&rules(), &doc, &Config::default(), Some(PORT), mode);
+            let out = rewrite::run(
+                &rules(),
+                &doc,
+                &Config::default(),
+                Some(PORT),
+                mode,
+                &|| true,
+            );
             println!(
                 "\n--- {name} / {mode:?} ({} words -> {}, {:.1}s) ---",
                 text.split_whitespace().count(),
@@ -698,7 +778,7 @@ fn a_long_text_still_reaches_the_model_one_group_at_a_time() {
     // Nothing listens on this port, so the first group's error is the answer:
     // the text was chunked rather than refused as too long.
     assert!(matches!(
-        rewrite::run(&rules(), &long, &config, Some(9), Mode::Unslop),
+        rewrite::run(&rules(), &long, &config, Some(9), Mode::Unslop, &|| true),
         Err(rewrite::Rejected::Model(_))
     ));
 }
@@ -725,6 +805,7 @@ fn a_real_chunked_rewrite_removes_the_tells_and_keeps_the_facts_in_every_group()
         &config,
         Some(PORT),
         Mode::Unslop,
+        &|| true,
     ) {
         Ok(doc) => doc.text().to_owned(),
         Err(err) => panic!("rewrite rejected: {err}"),

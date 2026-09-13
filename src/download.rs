@@ -32,6 +32,18 @@ impl Progress {
     }
 }
 
+/// How long one request may spend on the body before it is cut and resumed.
+///
+/// ureq has no idle timeout, only a bound on the whole body, so a stalled
+/// connection would otherwise sit there for good with the popup saying
+/// "Downloading" and no way to retry. Cutting the body every few minutes and
+/// picking up with a Range request costs a TLS handshake per segment, which
+/// both hosts handle, and turns a stall into an error within this long.
+const SEGMENT: Duration = Duration::from_secs(180);
+
+/// For the connection and the response headers, which are quick or dead.
+const HANDSHAKE: Duration = Duration::from_secs(30);
+
 /// Download `url` to `dest`, resuming any partial transfer already there.
 ///
 /// `on_progress` is called at most a few times a second, and once at the end.
@@ -49,9 +61,53 @@ pub fn to_file(
     }
 
     let partial = part_path(dest);
-    let resume_from = fs::metadata(&partial).map_or(0, |meta| meta.len());
+    loop {
+        let before = len_of(&partial);
+        let mut resumed = false;
+        match segment(url, &partial, before, &mut resumed, &mut on_progress) {
+            Ok(Progress { downloaded, total }) if total.is_none_or(|total| total == downloaded) => {
+                // Only now is the file safe to treat as a model.
+                fs::rename(&partial, dest)?;
+                on_progress(Progress {
+                    downloaded,
+                    total: total.or(Some(downloaded)),
+                });
+                return Ok(());
+            }
+            // A segment that ended early after real progress is a slow or
+            // flapping link, not a dead one: pick up where it stopped. Unless
+            // the server ignored the Range header, in which case every attempt
+            // starts over and trying again would never finish.
+            _ if len_of(&partial) > before && (before == 0 || resumed) => continue,
+            Ok(Progress { downloaded, total }) => {
+                // Leave the partial file in place so the next attempt resumes.
+                return Err(format!(
+                    "transfer ended early at {downloaded} of {} bytes",
+                    total.unwrap_or_default()
+                )
+                .into());
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
 
-    let mut request = ureq::get(url);
+/// One request's worth of the file, appended to `partial`. `resumed` reports
+/// whether the server honoured the Range header, which the caller needs even
+/// when the read then fails.
+fn segment(
+    url: &str,
+    partial: &Path,
+    resume_from: u64,
+    resumed: &mut bool,
+    on_progress: &mut impl FnMut(Progress),
+) -> Result<Progress, Box<dyn std::error::Error>> {
+    let mut request = ureq::get(url)
+        .config()
+        .timeout_connect(Some(HANDSHAKE))
+        .timeout_recv_response(Some(HANDSHAKE))
+        .timeout_recv_body(Some(SEGMENT))
+        .build();
     if resume_from > 0 {
         request = request.header("Range", &format!("bytes={resume_from}-"));
     }
@@ -59,16 +115,16 @@ pub fn to_file(
 
     // A server that ignored the range header sends the whole file again, and
     // appending to the partial file would corrupt it.
-    let resuming = response.status().as_u16() == 206;
-    let offset = if resuming { resume_from } else { 0 };
+    *resumed = response.status().as_u16() == 206;
+    let offset = if *resumed { resume_from } else { 0 };
     let total = content_length(&response).map(|len| len + offset);
 
     let mut file = File::options()
         .create(true)
         .write(true)
-        .truncate(!resuming)
-        .open(&partial)?;
-    if resuming {
+        .truncate(!*resumed)
+        .open(partial)?;
+    if *resumed {
         file.seek(io::SeekFrom::End(0))?;
     }
 
@@ -91,22 +147,11 @@ pub fn to_file(
         }
     }
     file.sync_all()?;
-    drop(file);
+    Ok(Progress { downloaded, total })
+}
 
-    if let Some(total) = total
-        && downloaded != total
-    {
-        // Leave the partial file in place so the next attempt resumes.
-        return Err(format!("transfer ended early at {downloaded} of {total} bytes").into());
-    }
-
-    // Only now is the file safe to treat as a model.
-    fs::rename(&partial, dest)?;
-    on_progress(Progress {
-        downloaded,
-        total: total.or(Some(downloaded)),
-    });
-    Ok(())
+fn len_of(path: &Path) -> u64 {
+    fs::metadata(path).map_or(0, |meta| meta.len())
 }
 
 fn part_path(dest: &Path) -> PathBuf {

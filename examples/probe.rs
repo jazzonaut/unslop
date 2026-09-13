@@ -89,6 +89,7 @@ fn main() {
                 &config,
                 Some(port),
                 mode,
+                &|| true,
             );
             let ms = started.elapsed().as_millis();
             total_before += score(&before);

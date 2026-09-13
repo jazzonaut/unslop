@@ -1,7 +1,7 @@
 // No console window: this is a resident background application.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::str::FromStr;
+use std::{os::windows::io::AsRawHandle, str::FromStr};
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use tao::{
@@ -9,8 +9,12 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
 };
 use unslop::{
-    Message, app::App, config::Config, icon, install::Installer, rules::Rules, startup, tray::Tray,
+    Message, app::App, config::Config, icon, paths, rules::Rules, startup, tray::Tray,
     window::Popup,
+};
+use windows::Win32::{
+    Foundation::HANDLE,
+    System::Console::{STD_ERROR_HANDLE, SetStdHandle},
 };
 
 /// Used when the configured hotkey cannot be parsed, so a typo leaves the
@@ -22,6 +26,7 @@ const FALLBACK_HOTKEY: &str = "CTRL+ALT+KeyU";
 const RULE_PACK: &str = include_str!("../rules/slop-rules.json");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    log_to_file();
     let config = Config::load();
     let rules = load_rules(&config);
     let hotkey = hotkey(&config);
@@ -29,8 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image = icon::load(&config.icon);
     let hotkey_label = config.hotkey.clone();
     let at_startup = config.launch_at_startup;
-    let installer = Installer::new(&config.local.model);
-    let mut app = App::new(config, rules, installer);
+    let mut app = App::new(config, rules);
 
     let event_loop = EventLoopBuilder::<Message>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -99,6 +103,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     })
+}
+
+/// Point stderr at a file beside the executable.
+///
+/// The release build has no console, so every `eprintln!` in the application,
+/// and the panic message should it ever come to that, would otherwise go
+/// nowhere. The debug build keeps its console. std looks the handle up on every
+/// write, so nothing else has to change.
+fn log_to_file() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let path = paths::beside_exe("unslop.log");
+    // Appended, so the previous session's last words survive a restart, and
+    // started over once it has grown past a megabyte.
+    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > 1024 * 1024) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let Ok(file) = std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    unsafe {
+        let _ = SetStdHandle(STD_ERROR_HANDLE, HANDLE(file.as_raw_handle()));
+    }
+    // Kept open for the life of the process: dropping it would close the
+    // handle stderr now writes through.
+    std::mem::forget(file);
 }
 
 /// The user's rule pack if they have one, otherwise the embedded copy.

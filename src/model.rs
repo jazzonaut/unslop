@@ -21,6 +21,12 @@ use std::{
 /// installer, which also has to run a console application.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Longest a single model call may take, end to end. A rewrite is seconds on
+/// CUDA and twenty-odd on Vulkan, so a server that has not answered in this
+/// long is stuck, and ureq waits forever by default: the worker thread would
+/// hang, and the popup with it. Shared with the remote provider.
+pub const CALL_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Bundled backends in preference order.
 ///
 /// CUDA is an order of magnitude faster on NVIDIA hardware: measured on a 4070
@@ -107,6 +113,14 @@ impl Model {
         Ok(port)
     }
 
+    /// Note that the server has just been used, so the idle clock runs from
+    /// the end of a job rather than its start.
+    pub fn touch(&mut self) {
+        if let Some(server) = &mut self.server {
+            server.last_used = Instant::now();
+        }
+    }
+
     /// Shut the server down if it has gone unused, releasing its VRAM.
     pub fn unload_if_idle(&mut self) {
         let idle = self
@@ -142,16 +156,20 @@ impl Drop for Model {
 /// Whether the server on `port` has finished loading.
 pub fn is_ready(port: u16) -> bool {
     ureq::get(format!("http://127.0.0.1:{port}/health"))
+        .config()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .build()
         .call()
         .is_ok_and(|response| response.status().is_success())
 }
 
-/// Block until the server answers, or give up.
+/// Block until the server answers, or give up. `keep_waiting` is asked between
+/// polls, so a job nobody wants any more stops waiting for the weights.
 ///
 /// Called from a worker thread: loading 8B of weights takes several seconds.
-pub fn wait_until_ready(port: u16, timeout: Duration) -> bool {
+pub fn wait_until_ready(port: u16, timeout: Duration, keep_waiting: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    while Instant::now() < deadline && keep_waiting() {
         if is_ready(port) {
             return true;
         }
@@ -225,6 +243,9 @@ pub fn rewrite(
     });
 
     let mut response = ureq::post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+        .config()
+        .timeout_global(Some(CALL_TIMEOUT))
+        .build()
         .send_json(&request)
         .map_err(|err| format!("the model server did not answer: {err}"))?;
 

@@ -3,7 +3,7 @@
 //! Sanitising only affects what is *rendered*. The document we copy back keeps
 //! the original markup, so nothing here costs the user any paste fidelity.
 
-use std::sync::LazyLock;
+use std::{sync::LazyLock, time::Duration};
 
 use similar::{ChangeTag, TextDiff};
 
@@ -34,8 +34,14 @@ pub fn preview(doc: &Doc) -> String {
 /// about. Every piece of either side is escaped before it is wrapped, so the
 /// diff cannot smuggle markup past the sanitiser.
 pub fn diff(original: &str, published: &str) -> String {
+    // Bounded: this runs on the UI thread for every update, and Myers over two
+    // long texts that share little can take seconds. Past the deadline
+    // `similar` finishes with a coarser diff that is still correct.
+    let diff = TextDiff::configure()
+        .timeout(Duration::from_millis(300))
+        .diff_words(original, published);
     let mut out = String::from("<pre>");
-    for change in TextDiff::from_words(original, published).iter_all_changes() {
+    for change in diff.iter_all_changes() {
         let text = ammonia::clean_text(change.value());
         out.push_str(&match change.tag() {
             ChangeTag::Delete => format!("<del>{text}</del>"),

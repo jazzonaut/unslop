@@ -652,3 +652,104 @@ fn only_a_refusal_a_second_draw_could_fix_gets_one() {
     assert!(!Rejected::Model("no server".to_owned()).worth_another_draw());
     assert!(!Rejected::Style("the tells are still there").worth_another_draw());
 }
+
+#[test]
+fn a_long_text_is_packed_into_paragraph_groups_cut_at_blank_lines() {
+    let text = format!(
+        "{}\r\n\r\n{}\n\n\n\n{}",
+        "a".repeat(30),
+        "b".repeat(30),
+        "c".repeat(30)
+    );
+    // 30 + 2 + 30 fits in 62, the third paragraph does not.
+    assert_eq!(
+        rewrite::chunks(&text, 62, 100),
+        Ok(vec![
+            format!("{}\n\n{}", "a".repeat(30), "b".repeat(30)),
+            "c".repeat(30),
+        ])
+    );
+    // A list is one paragraph, so it is never cut in half.
+    let list = "Intro:\n\n- one\n- two\n- three";
+    assert_eq!(
+        rewrite::chunks(list, 20, 100),
+        Ok(vec![
+            "Intro:".to_owned(),
+            "- one\n- two\n- three".to_owned()
+        ])
+    );
+    // A paragraph over the target but under the ceiling goes alone; over the
+    // ceiling it has nowhere to go and is refused.
+    assert_eq!(
+        rewrite::chunks(&"x".repeat(70), 62, 100),
+        Ok(vec!["x".repeat(70)])
+    );
+    assert_eq!(
+        rewrite::chunks(&"x".repeat(101), 62, 100),
+        Err(rewrite::Rejected::TooLong)
+    );
+}
+
+#[test]
+fn a_long_text_still_reaches_the_model_one_group_at_a_time() {
+    let mut config = Config::default();
+    config.rewrite.chunk_chars = 40;
+    let long = Doc::Plain(["In order to ship we cut scope."; 4].join("\n\n"));
+    // Nothing listens on this port, so the first group's error is the answer:
+    // the text was chunked rather than refused as too long.
+    assert!(matches!(
+        rewrite::run(&rules(), &long, &config, Some(9), Mode::Unslop),
+        Err(rewrite::Rejected::Model(_))
+    ));
+}
+
+#[test]
+#[ignore = "needs llama-server running"]
+fn a_real_chunked_rewrite_removes_the_tells_and_keeps_the_facts_in_every_group() {
+    let groups = [
+        "In today's rapidly evolving digital landscape, it is important to note that our \
+         robust platform doesn't just streamline your workflow, it fundamentally transforms \
+         it. Please send the \u{a3}4,500 invoice to billing@example.com by March 12.",
+        "By leveraging cutting-edge technology, we foster a vibrant ecosystem that empowers \
+         teams to delve into their data. The rollout begins on 3 April and costs $120 a seat.",
+        "It's not just about speed, it's about reliability. Ultimately, the seamless \
+         integration is a testament to our commitment. Contact ops@example.com with questions.",
+    ];
+    let mut config = Config::default();
+    // Well under any single group's length plus the next, so each is its own call.
+    config.rewrite.chunk_chars = 300;
+
+    let out = match rewrite::run(
+        &rules(),
+        &Doc::Plain(groups.join("\n\n")),
+        &config,
+        Some(PORT),
+        Mode::Unslop,
+    ) {
+        Ok(doc) => doc.text().to_owned(),
+        Err(err) => panic!("rewrite rejected: {err}"),
+    };
+    println!("\n--- CHUNKED REWRITE ---\n{out}\n");
+
+    assert_eq!(
+        out.split("\n\n").count(),
+        3,
+        "paragraph groups did not survive: {out}"
+    );
+    for fact in [
+        "\u{a3}4,500",
+        "billing@example.com",
+        "March 12",
+        "3 April",
+        "$120",
+        "ops@example.com",
+    ] {
+        assert!(out.contains(fact), "lost {fact}: {out}");
+    }
+    let lower = out.to_lowercase();
+    for banned in [
+        "in today", "delve", "leverag", "n't just", "not just", "\u{2014}",
+    ] {
+        assert!(!lower.contains(banned), "{banned} survived: {out}");
+    }
+}

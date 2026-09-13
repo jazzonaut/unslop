@@ -70,6 +70,7 @@ pub struct Rewrite {
     pub provider: Provider,
     pub temperature: f32,
     pub max_input_chars: usize,
+    pub chunk_chars: usize,
     pub max_output_tokens: u32,
 }
 

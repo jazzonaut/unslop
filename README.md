@@ -89,6 +89,10 @@ then restart. The settings worth knowing about:
 - `rewrite.provider` - `local`, `remote`, or `off`. `off` is a genuine option
   rather than a degraded one: the rules pass alone fixes filler phrases and em
   dashes instantly.
+- `rewrite.chunk_chars` - how much text the model is handed at a time. Longer
+  clipboard content is cut at blank lines into groups of about this size, each
+  rewritten in its own call and joined back up. Small on purpose: the 4B edits
+  a short text well and a long one barely at all.
 - `local.idle_unload_mins` - how long an idle model server keeps its VRAM. 8 GB
   is not enough to hold the weights resident all day, so it is handed back and
   the server restarted on demand.

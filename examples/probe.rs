@@ -3,6 +3,8 @@
 //!     cargo run --release --example probe -- sample.txt 8127 [runs] [--verbose]
 //!     cargo run --release --example probe -- bench/corpus.json 8127 [runs]
 //!
+//! `--chunk=CHARS` overrides `chunk_chars`, the size of a paragraph group.
+//!
 //! Sums surviving tells the way the bench scorer does: tier-1 words, fix-less
 //! phrases and regex detectors of weight 2 or more.
 
@@ -36,7 +38,10 @@ fn main() {
         Mode::Unslop
     };
     let rules = Rules::load(include_str!("../rules/slop-rules.json")).expect("pack");
-    let config = Config::default();
+    let mut config = Config::default();
+    if let Some(chars) = args.iter().find_map(|a| a.strip_prefix("--chunk=")) {
+        config.rewrite.chunk_chars = chars.parse().expect("--chunk=CHARS");
+    }
 
     let items: Vec<(String, String)> = if path.ends_with(".json") {
         let corpus: serde_json::Value =

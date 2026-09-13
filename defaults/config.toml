@@ -64,9 +64,24 @@ provider = "local"
 # giving the same answer twice rather than towards variety.
 temperature = 0.2
 
-# Clipboard content longer than this is left to the rules pass. The input, the
-# instructions and the reply all have to fit the context window together.
+# The most text the model is handed in one call. The input, the instructions
+# and the reply all have to fit the context window together. A single paragraph
+# longer than this is left to the rules pass.
 max_input_chars = 6000
+
+# How much text to hand the model at a time. Longer clipboard content is cut at
+# blank lines into groups of about this many characters, each rewritten in its
+# own call and joined back up. Small on purpose: the 4B edits a short text
+# well and a long one barely at all. Measured on an 8400-character text of 52
+# tells, one run each:
+#
+#   6000 chars   52 left   (and one group refused for a dropped value)
+#   3000 chars   27 left
+#   1500 chars    8 left   <- this one
+#
+# The cost is time, about ten seconds a group, and the rules result is on the
+# clipboard from the first moment either way.
+chunk_chars = 1500
 
 # Longest rewrite to accept before giving up on a runaway generation.
 max_output_tokens = 1200

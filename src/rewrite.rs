@@ -54,7 +54,7 @@ impl Rejected {
 impl fmt::Display for Rejected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Rejected::TooLong => write!(f, "too long to rewrite, rules only"),
+            Rejected::TooLong => write!(f, "a paragraph too long to rewrite, rules only"),
             Rejected::Facts(violation) => write!(f, "rewrite not copied, {violation}"),
             Rejected::Structure(what) => write!(f, "rewrite not copied, {what}"),
             Rejected::Style(what) => write!(f, "rewrite not copied, {what}"),
@@ -354,6 +354,14 @@ fn repair_prompt(findings: &[Finding], text: &str, protected: usize) -> String {
 /// before handing it over, so what arrives here is the trusted baseline and the
 /// text the model is asked to edit.
 ///
+/// A text longer than `chunk_chars` is edited a paragraph group at a time, see
+/// `chunks`. Every check the model pass makes is local to the text it was
+/// given, so each group is validated on its own; only the structure check and
+/// the rules re-clean need the whole document, and those run once over the
+/// join. A group the model spoils keeps its own baseline rather than costing
+/// the rest of the rewrite: at roughly 85% per call, all-or-nothing over five
+/// groups would refuse more than half of long texts.
+///
 /// Blocking: call from a worker thread.
 pub fn run(
     rules: &Rules,
@@ -363,15 +371,89 @@ pub fn run(
     mode: Mode,
 ) -> Result<Doc, Rejected> {
     let baseline_markdown = markdown_from_doc(doc)?;
+    let (target, ceiling) = (config.rewrite.chunk_chars, config.rewrite.max_input_chars);
 
-    if baseline_markdown.chars().count() > config.rewrite.max_input_chars {
-        return Err(Rejected::TooLong);
+    if baseline_markdown.chars().count() <= target {
+        return rewrite_one(rules, doc, &baseline_markdown, config, port, mode);
     }
 
+    let (mut parts, mut passed, mut refused) = (Vec::new(), 0, None);
+    for chunk in chunks(&baseline_markdown, target, ceiling)? {
+        match rewrite_one(
+            rules,
+            &Doc::Plain(chunk.clone()),
+            &chunk,
+            config,
+            port,
+            mode,
+        ) {
+            Ok(edited) => {
+                passed += 1;
+                parts.push(edited.text().to_owned());
+            }
+            // A server that is not answering will not answer for the next group.
+            Err(err @ Rejected::Model(_)) => return Err(err),
+            Err(err) => {
+                refused.get_or_insert(err);
+                parts.push(chunk);
+            }
+        }
+    }
+    if let (0, Some(refused)) = (passed, refused) {
+        return Err(refused);
+    }
+
+    let joined = candidate_doc(doc, parts.join("\n\n"));
+    if mode == Mode::Tldr {
+        // Summaries of the pieces are a digest, not a summary. Summarise that,
+        // and chunk again should even the digest not fit.
+        return run(rules, &joined, config, port, mode);
+    }
+    let final_doc = rules.clean_doc(&joined).doc;
+    validate_structure(doc, &baseline_markdown, &final_doc)?;
+    Ok(final_doc)
+}
+
+/// One model pass over a text that fits the context window.
+fn rewrite_one(
+    rules: &Rules,
+    doc: &Doc,
+    baseline_markdown: &str,
+    config: &Config,
+    port: Option<u16>,
+    mode: Mode,
+) -> Result<Doc, Rejected> {
     match mode {
-        Mode::Unslop => unslop(rules, doc, &baseline_markdown, config, port),
-        Mode::Simplify | Mode::Tldr => condense(rules, doc, &baseline_markdown, config, port, mode),
+        Mode::Unslop => unslop(rules, doc, baseline_markdown, config, port),
+        Mode::Simplify | Mode::Tldr => condense(rules, doc, baseline_markdown, config, port, mode),
     }
+}
+
+/// Paragraph groups of about `target` characters, cut only at blank lines so
+/// a list or a table is never split in half. A paragraph longer than the
+/// target goes in a group of its own, up to the `ceiling` the context window
+/// allows; beyond that it has nowhere to go and the text is refused as it
+/// always was.
+///
+/// Public so the packing can be tested without a model on the other end.
+pub fn chunks(text: &str, target: usize, ceiling: usize) -> Result<Vec<String>, Rejected> {
+    let text = text.replace("\r\n", "\n");
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for paragraph in text.split("\n\n").filter(|p| !p.trim().is_empty()) {
+        let len = paragraph.chars().count();
+        if len > ceiling {
+            return Err(Rejected::TooLong);
+        }
+        match out.last_mut() {
+            Some((chunk, used)) if *used + 2 + len <= target => {
+                chunk.push_str("\n\n");
+                chunk.push_str(paragraph);
+                *used += 2 + len;
+            }
+            _ => out.push((paragraph.to_owned(), len)),
+        }
+    }
+    Ok(out.into_iter().map(|(chunk, _)| chunk).collect())
 }
 
 /// The checklist-driven edit described at the top of the file.

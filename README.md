@@ -51,7 +51,7 @@ signed. "More info", then "Run anyway". Every release also carries a `.sha256`
 file, if you would rather check the download than trust it:
 
 ```
-Get-FileHash unslop-v0.3.4-x86_64-windows.zip -Algorithm SHA256
+Get-FileHash unslop-v0.3.5-x86_64-windows.zip -Algorithm SHA256
 ```
 
 Or build it yourself.
